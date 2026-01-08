@@ -1,4 +1,4 @@
-module claude-cli-setup
+module dmxapi-claude-code
 
 go 1.21
 
