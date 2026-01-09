@@ -457,6 +457,60 @@ func getNewAuthToken(existing, hostname string) string {
 	}
 }
 
+// selectFixOption 让用户选择要修改的内容
+func selectFixOption() int {
+	fmt.Println("请选择要修改的内容:")
+	fmt.Println("  1. URL 有问题")
+	fmt.Println("  2. Key 有问题")
+	fmt.Println("  3. 都有问题")
+
+	for {
+		input := readInput("请输入选项 (1/2/3): ")
+		switch input {
+		case "1":
+			return 1
+		case "2":
+			return 2
+		case "3":
+			return 3
+		default:
+			printError("无效选项，请输入 1、2 或 3")
+		}
+	}
+}
+
+// inputNewBaseURL 输入新的 Base URL（无需确认是否修改）
+func inputNewBaseURL() string {
+	for {
+		input := readInput("请输入新的 Base URL: ")
+		if input == "" {
+			printError("URL 不能为空")
+			continue
+		}
+		input = ensureScheme(input)
+		if err := validateURL(input); err != nil {
+			printError(err.Error())
+			continue
+		}
+		return input
+	}
+}
+
+// inputNewAuthToken 输入新的 Auth Token（无需确认是否修改）
+func inputNewAuthToken(hostname string) string {
+	if hostname != "" {
+		fmt.Printf("  获取地址: https://%s/token\n", hostname)
+	}
+	for {
+		input := readInput("请输入新的 Auth Token: ")
+		if input == "" {
+			printError("Token 不能为空")
+			continue
+		}
+		return strings.TrimSpace(input)
+	}
+}
+
 // configureModels 配置模型
 func configureModels(cfg *Config) {
 	fmt.Println()
@@ -595,12 +649,37 @@ func main() {
 	// 配置 Auth Token
 	cfg.AuthToken = getNewAuthToken(cfg.AuthToken, hostname)
 
-	// 验证 API 连接
+	// 验证 API 连接（循环直到成功）
 	fmt.Println()
-	if err := validateAPIConnection(cfg.BaseURL, cfg.AuthToken); err != nil {
-		printError(fmt.Sprintf("API 连接验证失败: %v", err))
-		printError("请检查 Base URL 和 Token 是否正确后重新运行")
-		os.Exit(1)
+	for {
+		if err := validateAPIConnection(cfg.BaseURL, cfg.AuthToken); err != nil {
+			printError(fmt.Sprintf("API 连接验证失败: %v", err))
+
+			// 显示当前的URL和Key
+			fmt.Println()
+			printInfo("当前配置:")
+			fmt.Printf("  Base URL: %s\n", cfg.BaseURL)
+			fmt.Printf("  API Key:  %s\n", maskToken(cfg.AuthToken))
+			fmt.Println()
+
+			// 让用户选择要修改什么
+			choice := selectFixOption()
+
+			switch choice {
+			case 1: // 修改URL
+				cfg.BaseURL = inputNewBaseURL()
+				hostname = extractHost(cfg.BaseURL)
+			case 2: // 修改Key
+				cfg.AuthToken = inputNewAuthToken(hostname)
+			case 3: // 都修改
+				cfg.BaseURL = inputNewBaseURL()
+				hostname = extractHost(cfg.BaseURL)
+				cfg.AuthToken = inputNewAuthToken(hostname)
+			}
+			fmt.Println()
+			continue
+		}
+		break
 	}
 	printSuccess("API 连接验证成功!")
 
