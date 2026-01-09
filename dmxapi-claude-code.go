@@ -659,7 +659,7 @@ func main() {
 			fmt.Println()
 			printInfo("当前配置:")
 			fmt.Printf("  Base URL: %s\n", cfg.BaseURL)
-			fmt.Printf("  API Key:  %s\n", maskToken(cfg.AuthToken))
+			fmt.Printf("  API Key:  %s\n", cfg.AuthToken)
 			fmt.Println()
 
 			// 让用户选择要修改什么
