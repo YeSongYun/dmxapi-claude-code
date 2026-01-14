@@ -95,6 +95,33 @@ func printInfo(text string) {
 	printColor(colorCyan, "→ "+text+"\n")
 }
 
+// runWithSpinner 带旋转动画执行任务
+func runWithSpinner(message string, task func() error) error {
+	spinner := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+	done := make(chan bool)
+	var err error
+
+	go func() {
+		i := 0
+		for {
+			select {
+			case <-done:
+				return
+			default:
+				fmt.Printf("\r%s%s %s%s", colorCyan, spinner[i], message, colorReset)
+				i = (i + 1) % len(spinner)
+				time.Sleep(80 * time.Millisecond)
+			}
+		}
+	}()
+
+	err = task()
+	done <- true
+
+	fmt.Print("\r" + strings.Repeat(" ", 50) + "\r")
+	return err
+}
+
 // ==================== 输入处理 ====================
 
 // readInput 读取用户输入
@@ -582,9 +609,6 @@ func configureModels(cfg *Config) {
 
 // saveConfig 保存配置（批量设置，一次系统调用）
 func saveConfig(cfg Config) error {
-	fmt.Println()
-	printInfo("正在保存配置...")
-
 	vars := map[string]string{
 		envBaseURL:     cfg.BaseURL,
 		envAuthToken:   cfg.AuthToken,
@@ -723,12 +747,22 @@ func main() {
 	// 配置模型
 	configureModels(&cfg)
 
-	// 保存配置
-	if err := saveConfig(cfg); err != nil {
+	// 保存配置（带动画）
+	fmt.Println()
+	err := runWithSpinner("正在保存配置...", func() error {
+		return saveConfig(cfg)
+	})
+	if err != nil {
 		printError(fmt.Sprintf("保存配置失败: %v", err))
 		os.Exit(1)
 	}
+	printSuccess("保存成功!")
 
 	// 打印摘要
 	printSummary(cfg)
+
+	// 等待用户退出
+	fmt.Println()
+	printInfo("按回车键退出...")
+	bufio.NewReader(os.Stdin).ReadBytes('\n')
 }
