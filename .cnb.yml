@@ -29,7 +29,8 @@ $:
             auth_type: https
             username: ${GIT_USERNAME}
             password: ${GIT_ACCESS_TOKEN}
-            sync_mode: rebase
+            sync_mode: force
+            sync_tags: true
         # 1. 生成更新日志
         - name: 生成更新日志
           image: cnbcool/changelog
@@ -90,3 +91,10 @@ $:
             attachments:
               - "./dmxapi-claude-code-${CNB_BRANCH}-*"
             ttl: 0
+
+        # 5. 清理旧版本，只保留最近3个
+        - name: 清理旧版本
+          image: docker.cnb.cool/cnb/plugins/cnbcool/release-clean:latest
+          settings:
+            filter: "RECENT_N=3"
+            debug: false
