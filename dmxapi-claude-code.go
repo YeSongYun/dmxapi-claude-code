@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -225,23 +226,35 @@ func getEnvVar(key string) string {
 	return os.Getenv(key)
 }
 
-// setEnvVarsWindows 在 Windows 上批量设置用户环境变量（一次 PowerShell 调用）
+// setEnvVarsWindows 在 Windows 上批量设置用户环境变量（使用 SETX 并行执行）
 func setEnvVarsWindows(vars map[string]string) error {
-	var commands []string
+	var wg sync.WaitGroup
+	errChan := make(chan error, len(vars))
+
 	for key, value := range vars {
 		if value == "" {
 			continue
 		}
-		cmd := fmt.Sprintf("[Environment]::SetEnvironmentVariable('%s', '%s', 'User')",
-			strings.ReplaceAll(key, "'", "''"),
-			strings.ReplaceAll(value, "'", "''"))
-		commands = append(commands, cmd)
+		wg.Add(1)
+		go func(k, v string) {
+			defer wg.Done()
+			// setx KEY "VALUE" 设置用户环境变量
+			if err := runCommand("setx", k, v); err != nil {
+				errChan <- fmt.Errorf("设置环境变量 %s 失败: %v", k, err)
+			}
+		}(key, value)
 	}
-	if len(commands) == 0 {
-		return nil
+
+	wg.Wait()
+	close(errChan)
+
+	// 检查是否有错误
+	for err := range errChan {
+		if err != nil {
+			return err
+		}
 	}
-	psCmd := strings.Join(commands, "; ")
-	return runCommand("powershell", "-NoProfile", "-Command", psCmd)
+	return nil
 }
 
 // setEnvVarsUnix 在 Unix 系统上批量设置环境变量（一次文件读写）
