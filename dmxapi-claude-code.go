@@ -198,92 +198,87 @@ func getEnvVar(key string) string {
 	return os.Getenv(key)
 }
 
-// setEnvVar 设置环境变量（跨平台）
-func setEnvVar(key, value string) error {
-	// 设置当前进程的环境变量
-	if err := os.Setenv(key, value); err != nil {
-		return err
+// setEnvVarsWindows 在 Windows 上批量设置用户环境变量（一次 PowerShell 调用）
+func setEnvVarsWindows(vars map[string]string) error {
+	var commands []string
+	for key, value := range vars {
+		if value == "" {
+			continue
+		}
+		cmd := fmt.Sprintf("[Environment]::SetEnvironmentVariable('%s', '%s', 'User')",
+			strings.ReplaceAll(key, "'", "''"),
+			strings.ReplaceAll(value, "'", "''"))
+		commands = append(commands, cmd)
 	}
-
-	// 持久化到系统
-	switch runtime.GOOS {
-	case "windows":
-		return setEnvVarWindows(key, value)
-	default:
-		return setEnvVarUnix(key, value)
+	if len(commands) == 0 {
+		return nil
 	}
-}
-
-// setEnvVarWindows 在 Windows 上设置用户环境变量
-func setEnvVarWindows(key, value string) error {
-	// 使用 PowerShell 执行，避免 cmd 的转义问题
-	psCmd := fmt.Sprintf(`[Environment]::SetEnvironmentVariable('%s', '%s', 'User')`,
-		strings.ReplaceAll(key, "'", "''"),
-		strings.ReplaceAll(value, "'", "''"))
-
-	// 优先使用 PowerShell
+	psCmd := strings.Join(commands, "; ")
 	return runCommand("powershell", "-NoProfile", "-Command", psCmd)
 }
 
-// setEnvVarUnix 在 Unix 系统上设置环境变量
-func setEnvVarUnix(key, value string) error {
+// setEnvVarsUnix 在 Unix 系统上批量设置环境变量（一次文件读写）
+func setEnvVarsUnix(vars map[string]string) error {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return err
 	}
 
-	// 构建 export 语句
-	exportLine := fmt.Sprintf("export %s='%s'\n", key, strings.ReplaceAll(value, "'", "'\\''"))
-
 	// 确定要写入的配置文件
 	var configFiles []string
-
 	switch runtime.GOOS {
 	case "darwin":
-		// macOS: 优先 zsh，兼容 bash
 		configFiles = []string{".zshrc", ".bash_profile"}
 	default:
-		// Linux: 优先 bashrc，兼容 profile
 		configFiles = []string{".bashrc", ".profile"}
 	}
 
 	// 写入配置文件
 	for _, configFile := range configFiles {
 		configPath := filepath.Join(homeDir, configFile)
-
-		// 检查文件是否存在
 		if _, err := os.Stat(configPath); os.IsNotExist(err) {
 			continue
 		}
 
-		// 读取现有内容
 		content, err := os.ReadFile(configPath)
 		if err != nil {
 			continue
 		}
 
-		// 检查是否已存在该环境变量的设置
-		marker := fmt.Sprintf("export %s=", key)
 		lines := strings.Split(string(content), "\n")
-		found := false
 		newLines := make([]string, 0, len(lines))
+		foundKeys := make(map[string]bool)
 
+		// 遍历现有行，替换已存在的变量
 		for _, line := range lines {
-			if strings.HasPrefix(strings.TrimSpace(line), marker) {
-				// 替换现有设置
-				newLines = append(newLines, strings.TrimSuffix(exportLine, "\n"))
-				found = true
-			} else {
+			replaced := false
+			for key, value := range vars {
+				if value == "" {
+					continue
+				}
+				marker := fmt.Sprintf("export %s=", key)
+				if strings.HasPrefix(strings.TrimSpace(line), marker) {
+					exportLine := fmt.Sprintf("export %s='%s'", key, strings.ReplaceAll(value, "'", "'\\''"))
+					newLines = append(newLines, exportLine)
+					foundKeys[key] = true
+					replaced = true
+					break
+				}
+			}
+			if !replaced {
 				newLines = append(newLines, line)
 			}
 		}
 
-		if !found {
-			// 添加到文件末尾
-			newLines = append(newLines, strings.TrimSuffix(exportLine, "\n"))
+		// 添加未找到的变量
+		for key, value := range vars {
+			if value == "" || foundKeys[key] {
+				continue
+			}
+			exportLine := fmt.Sprintf("export %s='%s'", key, strings.ReplaceAll(value, "'", "'\\''"))
+			newLines = append(newLines, exportLine)
 		}
 
-		// 写回文件
 		newContent := strings.Join(newLines, "\n")
 		if err := os.WriteFile(configPath, []byte(newContent), 0644); err != nil {
 			return fmt.Errorf("写入 %s 失败: %v", configPath, err)
@@ -585,12 +580,11 @@ func configureModels(cfg *Config) {
 	}
 }
 
-// saveConfig 保存配置
+// saveConfig 保存配置（批量设置，一次系统调用）
 func saveConfig(cfg Config) error {
 	fmt.Println()
 	printInfo("正在保存配置...")
 
-	// 保存所有环境变量
 	vars := map[string]string{
 		envBaseURL:     cfg.BaseURL,
 		envAuthToken:   cfg.AuthToken,
@@ -600,16 +594,20 @@ func saveConfig(cfg Config) error {
 		envOpusModel:   cfg.OpusModel,
 	}
 
+	// 设置当前进程环境变量
 	for key, value := range vars {
-		if value == "" {
-			continue
-		}
-		if err := setEnvVar(key, value); err != nil {
-			return fmt.Errorf("设置 %s 失败: %v", key, err)
+		if value != "" {
+			os.Setenv(key, value)
 		}
 	}
 
-	return nil
+	// 批量持久化到系统
+	switch runtime.GOOS {
+	case "windows":
+		return setEnvVarsWindows(vars)
+	default:
+		return setEnvVarsUnix(vars)
+	}
 }
 
 // printSummary 打印配置摘要
