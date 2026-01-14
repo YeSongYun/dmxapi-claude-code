@@ -23,14 +23,10 @@ $:
       stages:
         # 0. 先同步 Tag 到 GitHub
         - name: sync tag to github
-          image: tencentcom/git-sync
-          settings:
-            target_url: https://github.com/YeSongYun/dmxapi-claude-code.git
-            auth_type: https
-            username: ${GIT_USERNAME}
-            password: ${GIT_ACCESS_TOKEN}
-            sync_mode: force
-            sync_tags: true
+          image: alpine/git
+          script:
+            - git remote add github https://${GIT_USERNAME}:${GIT_ACCESS_TOKEN}@github.com/YeSongYun/dmxapi-claude-code.git || true
+            - git push github ${CNB_BRANCH} --force
         # 1. 生成更新日志
         - name: 生成更新日志
           image: cnbcool/changelog
