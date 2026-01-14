@@ -60,7 +60,7 @@ $:
           options:
             title: ${CNB_BRANCH}
             description: |
-              ## DMXAPI Claude Code ${CNB_BRANCH}
+              ## DMXAPI Claude Code 配置工具 ${CNB_BRANCH}
 
               ${RELEASE_NOTES}
 
