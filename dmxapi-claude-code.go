@@ -457,6 +457,27 @@ func getNewAuthToken(existing, hostname string) string {
 	}
 }
 
+// selectConfigMode 选择配置模式
+// 返回值: 1 = 完整配置, 2 = 仅配置模型
+func selectConfigMode() int {
+	fmt.Println("请选择配置模式:")
+	fmt.Println("  1. 完整配置 (配置 URL、Token 和模型)")
+	fmt.Println("  2. 仅配置模型 (跳过 URL 和 Token 配置)")
+	fmt.Println()
+
+	for {
+		input := readInput("请输入选项 (1/2): ")
+		switch input {
+		case "1":
+			return 1
+		case "2":
+			return 2
+		default:
+			printError("无效选项，请输入 1 或 2")
+		}
+	}
+}
+
 // selectFixOption 让用户选择要修改的内容
 func selectFixOption() int {
 	fmt.Println("请选择要修改的内容:")
@@ -637,51 +658,69 @@ func main() {
 	fmt.Printf("  系统: %s/%s\n", runtime.GOOS, runtime.GOARCH)
 	fmt.Println()
 
+	// 选择配置模式
+	configMode := selectConfigMode()
+
 	// 加载现有配置
 	cfg := loadExistingConfig()
 
-	// 配置 Base URL
-	cfg.BaseURL = getNewBaseURL(cfg.BaseURL)
+	// 根据配置模式执行不同流程
+	if configMode == 1 {
+		// 完整配置模式
+		// 配置 Base URL
+		cfg.BaseURL = getNewBaseURL(cfg.BaseURL)
 
-	// 提取主机名用于提示
-	hostname := extractHost(cfg.BaseURL)
+		// 提取主机名用于提示
+		hostname := extractHost(cfg.BaseURL)
 
-	// 配置 Auth Token
-	cfg.AuthToken = getNewAuthToken(cfg.AuthToken, hostname)
+		// 配置 Auth Token
+		cfg.AuthToken = getNewAuthToken(cfg.AuthToken, hostname)
 
-	// 验证 API 连接（循环直到成功）
-	fmt.Println()
-	for {
-		if err := validateAPIConnection(cfg.BaseURL, cfg.AuthToken); err != nil {
-			printError(fmt.Sprintf("API 连接验证失败: %v", err))
+		// 验证 API 连接（循环直到成功）
+		fmt.Println()
+		for {
+			if err := validateAPIConnection(cfg.BaseURL, cfg.AuthToken); err != nil {
+				printError(fmt.Sprintf("API 连接验证失败: %v", err))
 
-			// 显示当前的URL和Key
-			fmt.Println()
-			printInfo("当前配置:")
-			fmt.Printf("  Base URL: %s\n", cfg.BaseURL)
-			fmt.Printf("  API Key:  %s\n", cfg.AuthToken)
-			fmt.Println()
+				// 显示当前的URL和Key
+				fmt.Println()
+				printInfo("当前配置:")
+				fmt.Printf("  Base URL: %s\n", cfg.BaseURL)
+				fmt.Printf("  API Key:  %s\n", cfg.AuthToken)
+				fmt.Println()
 
-			// 让用户选择要修改什么
-			choice := selectFixOption()
+				// 让用户选择要修改什么
+				choice := selectFixOption()
 
-			switch choice {
-			case 1: // 修改URL
-				cfg.BaseURL = inputNewBaseURL()
-				hostname = extractHost(cfg.BaseURL)
-			case 2: // 修改Key
-				cfg.AuthToken = inputNewAuthToken(hostname)
-			case 3: // 都修改
-				cfg.BaseURL = inputNewBaseURL()
-				hostname = extractHost(cfg.BaseURL)
-				cfg.AuthToken = inputNewAuthToken(hostname)
+				switch choice {
+				case 1: // 修改URL
+					cfg.BaseURL = inputNewBaseURL()
+					hostname = extractHost(cfg.BaseURL)
+				case 2: // 修改Key
+					cfg.AuthToken = inputNewAuthToken(hostname)
+				case 3: // 都修改
+					cfg.BaseURL = inputNewBaseURL()
+					hostname = extractHost(cfg.BaseURL)
+					cfg.AuthToken = inputNewAuthToken(hostname)
+				}
+				fmt.Println()
+				continue
 			}
-			fmt.Println()
-			continue
+			break
 		}
-		break
+		printSuccess("API 连接验证成功!")
+	} else {
+		// 仅配置模型模式
+		if cfg.BaseURL == "" || cfg.AuthToken == "" {
+			printWarning("未检测到现有的 URL 或 Token 配置")
+			printInfo("将跳过 API 验证，仅配置模型")
+		} else {
+			printInfo("使用现有的 URL 和 Token 配置")
+			fmt.Printf("  Base URL: %s\n", cfg.BaseURL)
+			fmt.Printf("  Token: %s\n", maskToken(cfg.AuthToken))
+		}
+		fmt.Println()
 	}
-	printSuccess("API 连接验证成功!")
 
 	// 配置模型
 	configureModels(&cfg)
