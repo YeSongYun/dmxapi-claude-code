@@ -1,0 +1,82 @@
+# ============================================
+# CNB 云原生构建配置
+# ============================================
+
+# 主分支推送 - 同步到 GitHub
+main:
+  push:
+    - imports: https://cnb.cool/dmxapi/claude-code-my/-/blob/main/env.yml
+      stages:
+        - name: sync to github with rebase
+          image: tencentcom/git-sync
+          settings:
+            target_url: https://github.com/YeSongYun/dmxapi-claude-code.git
+            auth_type: https
+            username: ${GIT_USERNAME}
+            password: ${GIT_ACCESS_TOKEN}
+            sync_mode: rebase
+
+# Tag 推送 - 自动发布 Release
+$:
+  tag_push:
+    - stages:
+        # 1. 生成更新日志
+        - name: 生成更新日志
+          image: cnbcool/changelog
+          settings:
+            dryRun: true
+          exports:
+            latestChangeLog: RELEASE_NOTES
+
+        # 2. 编译各平台二进制文件
+        - name: 编译 Windows AMD64
+          image: golang:1.21
+          script:
+            - CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o dmxapi-claude-code-${CNB_BRANCH}-windows-amd64.exe
+
+        - name: 编译 Linux AMD64
+          image: golang:1.21
+          script:
+            - CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o dmxapi-claude-code-${CNB_BRANCH}-linux-amd64
+
+        - name: 编译 Linux ARM64
+          image: golang:1.21
+          script:
+            - CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o dmxapi-claude-code-${CNB_BRANCH}-linux-arm64
+
+        - name: 编译 macOS AMD64
+          image: golang:1.21
+          script:
+            - CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o dmxapi-claude-code-${CNB_BRANCH}-darwin-amd64
+
+        - name: 编译 macOS ARM64
+          image: golang:1.21
+          script:
+            - CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o dmxapi-claude-code-${CNB_BRANCH}-darwin-arm64
+
+        # 3. 上传附件到 Release
+        - name: 上传 Release 附件
+          image: cnbcool/attachments
+          settings:
+            attachments:
+              - "./dmxapi-claude-code-${CNB_BRANCH}-*"
+            ttl: 0
+
+        # 4. 创建 Release
+        - name: 创建 Release
+          type: git:release
+          options:
+            title: ${CNB_BRANCH}
+            description: |
+              ## DMXAPI Claude Code ${CNB_BRANCH}
+
+              ${RELEASE_NOTES}
+
+              ### 下载
+              | 平台 | 文件 |
+              |------|------|
+              | Windows x64 | dmxapi-claude-code-${CNB_BRANCH}-windows-amd64.exe |
+              | Linux x64 | dmxapi-claude-code-${CNB_BRANCH}-linux-amd64 |
+              | Linux ARM64 | dmxapi-claude-code-${CNB_BRANCH}-linux-arm64 |
+              | macOS Intel | dmxapi-claude-code-${CNB_BRANCH}-darwin-amd64 |
+              | macOS Apple Silicon | dmxapi-claude-code-${CNB_BRANCH}-darwin-arm64 |
