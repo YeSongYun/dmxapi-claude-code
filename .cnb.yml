@@ -19,7 +19,17 @@ main:
 # Tag 推送 - 自动发布 Release
 $:
   tag_push:
-    - stages:
+    - imports: https://cnb.cool/dmxapi/claude-code-my/-/blob/main/env.yml
+      stages:
+        # 0. 先同步 Tag 到 GitHub
+        - name: sync tag to github
+          image: tencentcom/git-sync
+          settings:
+            target_url: https://github.com/YeSongYun/dmxapi-claude-code.git
+            auth_type: https
+            username: ${GIT_USERNAME}
+            password: ${GIT_ACCESS_TOKEN}
+            sync_mode: rebase
         # 1. 生成更新日志
         - name: 生成更新日志
           image: cnbcool/changelog
