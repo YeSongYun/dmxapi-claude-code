@@ -54,15 +54,7 @@ $:
           script:
             - CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o dmxapi-claude-code-${CNB_BRANCH}-darwin-arm64
 
-        # 3. 上传附件到 Release
-        - name: 上传 Release 附件
-          image: cnbcool/attachments
-          settings:
-            attachments:
-              - "./dmxapi-claude-code-${CNB_BRANCH}-*"
-            ttl: 0
-
-        # 4. 创建 Release
+        # 3. 先创建 Release（必须在上传附件之前）
         - name: 创建 Release
           type: git:release
           options:
@@ -80,3 +72,11 @@ $:
               | Linux ARM64 | dmxapi-claude-code-${CNB_BRANCH}-linux-arm64 |
               | macOS Intel | dmxapi-claude-code-${CNB_BRANCH}-darwin-amd64 |
               | macOS Apple Silicon | dmxapi-claude-code-${CNB_BRANCH}-darwin-arm64 |
+
+        # 4. 再上传附件到已创建的 Release
+        - name: 上传 Release 附件
+          image: cnbcool/attachments
+          settings:
+            attachments:
+              - "./dmxapi-claude-code-${CNB_BRANCH}-*"
+            ttl: 0
