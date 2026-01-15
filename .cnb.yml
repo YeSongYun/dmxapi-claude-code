@@ -29,11 +29,11 @@ $:
             - git push github ${CNB_BRANCH} --force
         # 1. 生成更新日志（使用 git-cliff 支持 commit 自动分类）
         - name: 生成更新日志
-          image: orhunp/git-cliff
+          image: cnbcool/default-build-env
           script:
-            - apk add --no-cache git  # git-cliff 镜像中没有 git，需要先安装
-            - git fetch --tags origin  # 获取所有标签，确保 --latest 能找到上一个版本
-            - git-cliff --config cliff.toml --latest --strip header
+            - curl -sSL https://github.com/orhun/git-cliff/releases/download/v2.7.0/git-cliff-2.7.0-x86_64-unknown-linux-gnu.tar.gz | tar xz
+            - git fetch --tags origin
+            - ./git-cliff-2.7.0/git-cliff --config cliff.toml --latest --strip header
           exports:
             stdout: RELEASE_NOTES
 
