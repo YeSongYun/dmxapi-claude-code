@@ -130,7 +130,7 @@ $:
               ### 🔗 相关链接
 
               - [获取 API Token](https://www.dmxapi.cn/token)
-              - [使用文档](https://github.com/YeSongYun/dmxapi-claude-code#readme)
+              - [使用文档](https://cnb.cool/dmxapi/dmxapi_claude_code)
 
         # 4. 再上传附件到已创建的 Release
         - name: 上传 Release 附件
