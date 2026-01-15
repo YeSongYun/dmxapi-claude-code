@@ -1,0 +1,45 @@
+# GitHub Release Notes 自动分类配置
+# 当创建 Release 时，PR/Commit 会按以下规则自动分类
+
+changelog:
+  exclude:
+    labels:
+      - skip-changelog
+      - dependencies
+    authors:
+      - dependabot
+      - github-actions
+
+  categories:
+    - title: "🚀 新功能"
+      labels:
+        - enhancement
+        - feature
+        - feat
+
+    - title: "🐛 问题修复"
+      labels:
+        - bug
+        - fix
+        - bugfix
+
+    - title: "📖 文档更新"
+      labels:
+        - documentation
+        - docs
+
+    - title: "🔧 维护与优化"
+      labels:
+        - maintenance
+        - refactor
+        - performance
+        - perf
+
+    - title: "🏗️ 构建与 CI"
+      labels:
+        - ci
+        - build
+
+    - title: "📦 其他变更"
+      labels:
+        - "*"

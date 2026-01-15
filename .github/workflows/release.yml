@@ -22,27 +22,103 @@ jobs:
         with:
           go-version: '1.21'
 
+      # 生成 Changelog
+      - name: Generate Changelog
+        id: changelog
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: cliff.toml
+          args: --latest --strip header
+        env:
+          GITHUB_REPO: ${{ github.repository }}
+
       - name: Build binaries
         run: |
+          VERSION=${{ github.ref_name }}
+
           # Windows AMD64
-          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o dmxapi-claude-code-${{ github.ref_name }}-windows-amd64.exe
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o dmxapi-claude-code-${VERSION}-windows-amd64.exe
 
           # Linux AMD64
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o dmxapi-claude-code-${{ github.ref_name }}-linux-amd64
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o dmxapi-claude-code-${VERSION}-linux-amd64
 
           # Linux ARM64
-          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o dmxapi-claude-code-${{ github.ref_name }}-linux-arm64
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o dmxapi-claude-code-${VERSION}-linux-arm64
 
           # macOS AMD64
-          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o dmxapi-claude-code-${{ github.ref_name }}-darwin-amd64
+          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o dmxapi-claude-code-${VERSION}-darwin-amd64
 
           # macOS ARM64
-          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o dmxapi-claude-code-${{ github.ref_name }}-darwin-arm64
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o dmxapi-claude-code-${VERSION}-darwin-arm64
 
+      # 创建增强的 Release
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true
+          name: DMXAPI Claude Code ${{ github.ref_name }}
+          body: |
+            ## DMXAPI Claude Code 配置工具 ${{ github.ref_name }}
+
+            一键配置 Anthropic Claude Code CLI 环境变量的跨平台工具。
+
+            ---
+
+            ${{ steps.changelog.outputs.content }}
+
+            ---
+
+            ### 📥 下载
+
+            | 平台 | 架构 | 文件 |
+            |------|------|------|
+            | Windows | x64 | `dmxapi-claude-code-${{ github.ref_name }}-windows-amd64.exe` |
+            | Linux | x64 | `dmxapi-claude-code-${{ github.ref_name }}-linux-amd64` |
+            | Linux | ARM64 | `dmxapi-claude-code-${{ github.ref_name }}-linux-arm64` |
+            | macOS | Intel | `dmxapi-claude-code-${{ github.ref_name }}-darwin-amd64` |
+            | macOS | Apple Silicon | `dmxapi-claude-code-${{ github.ref_name }}-darwin-arm64` |
+
+            ---
+
+            ### 🛠️ 安装说明
+
+            #### Windows
+            ```powershell
+            # 下载后直接运行
+            .\dmxapi-claude-code-${{ github.ref_name }}-windows-amd64.exe
+            ```
+
+            #### Linux
+            ```bash
+            # 下载并添加执行权限
+            chmod +x dmxapi-claude-code-${{ github.ref_name }}-linux-amd64
+            ./dmxapi-claude-code-${{ github.ref_name }}-linux-amd64
+            ```
+
+            #### macOS
+            ```bash
+            # 下载并添加执行权限
+            chmod +x dmxapi-claude-code-${{ github.ref_name }}-darwin-arm64
+            # 首次运行可能需要在"系统设置 > 隐私与安全性"中允许
+            ./dmxapi-claude-code-${{ github.ref_name }}-darwin-arm64
+            ```
+
+            ---
+
+            ### 📋 配置的环境变量
+
+            | 环境变量 | 说明 |
+            |----------|------|
+            | `ANTHROPIC_BASE_URL` | API 服务器地址 |
+            | `ANTHROPIC_AUTH_TOKEN` | API 认证令牌 |
+            | `ANTHROPIC_MODEL` | 默认模型 |
+            | `ANTHROPIC_SMALL_FAST_MODEL` | 小型快速模型 |
+
+            ---
+
+            ### 🔗 相关链接
+
+            - [获取 API Token](https://www.dmxapi.cn/token)
+            - [使用文档](https://github.com/YeSongYun/dmxapi-claude-code#readme)
           files: |
             dmxapi-claude-code-${{ github.ref_name }}-windows-amd64.exe
             dmxapi-claude-code-${{ github.ref_name }}-linux-amd64

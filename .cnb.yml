@@ -65,20 +65,70 @@ $:
         - name: 创建 Release
           type: git:release
           options:
-            title: ${CNB_BRANCH}
+            title: DMXAPI Claude Code ${CNB_BRANCH}
             description: |
               ## DMXAPI Claude Code 配置工具 ${CNB_BRANCH}
 
+              一键配置 Anthropic Claude Code CLI 环境变量的跨平台工具。
+
+              ---
+
               ${RELEASE_NOTES}
 
-              ### 下载
-              | 平台 | 文件 |
-              |------|------|
-              | Windows x64 | dmxapi-claude-code-${CNB_BRANCH}-windows-amd64.exe |
-              | Linux x64 | dmxapi-claude-code-${CNB_BRANCH}-linux-amd64 |
-              | Linux ARM64 | dmxapi-claude-code-${CNB_BRANCH}-linux-arm64 |
-              | macOS Intel | dmxapi-claude-code-${CNB_BRANCH}-darwin-amd64 |
-              | macOS Apple Silicon | dmxapi-claude-code-${CNB_BRANCH}-darwin-arm64 |
+              ---
+
+              ### 📥 下载
+
+              | 平台 | 架构 | 文件 |
+              |------|------|------|
+              | Windows | x64 | `dmxapi-claude-code-${CNB_BRANCH}-windows-amd64.exe` |
+              | Linux | x64 | `dmxapi-claude-code-${CNB_BRANCH}-linux-amd64` |
+              | Linux | ARM64 | `dmxapi-claude-code-${CNB_BRANCH}-linux-arm64` |
+              | macOS | Intel | `dmxapi-claude-code-${CNB_BRANCH}-darwin-amd64` |
+              | macOS | Apple Silicon | `dmxapi-claude-code-${CNB_BRANCH}-darwin-arm64` |
+
+              ---
+
+              ### 🛠️ 安装说明
+
+              #### Windows
+              ```powershell
+              # 下载后直接运行
+              .\dmxapi-claude-code-${CNB_BRANCH}-windows-amd64.exe
+              ```
+
+              #### Linux
+              ```bash
+              # 下载并添加执行权限
+              chmod +x dmxapi-claude-code-${CNB_BRANCH}-linux-amd64
+              ./dmxapi-claude-code-${CNB_BRANCH}-linux-amd64
+              ```
+
+              #### macOS
+              ```bash
+              # 下载并添加执行权限
+              chmod +x dmxapi-claude-code-${CNB_BRANCH}-darwin-arm64
+              # 首次运行可能需要在"系统设置 > 隐私与安全性"中允许
+              ./dmxapi-claude-code-${CNB_BRANCH}-darwin-arm64
+              ```
+
+              ---
+
+              ### 📋 配置的环境变量
+
+              | 环境变量 | 说明 |
+              |----------|------|
+              | `ANTHROPIC_BASE_URL` | API 服务器地址 |
+              | `ANTHROPIC_AUTH_TOKEN` | API 认证令牌 |
+              | `ANTHROPIC_MODEL` | 默认模型 |
+              | `ANTHROPIC_SMALL_FAST_MODEL` | 小型快速模型 |
+
+              ---
+
+              ### 🔗 相关链接
+
+              - [获取 API Token](https://www.dmxapi.cn/token)
+              - [使用文档](https://github.com/YeSongYun/dmxapi-claude-code#readme)
 
         # 4. 再上传附件到已创建的 Release
         - name: 上传 Release 附件
