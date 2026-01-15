@@ -31,6 +31,7 @@ $:
         - name: 生成更新日志
           image: orhunp/git-cliff
           script:
+            - git fetch --tags origin  # 获取所有标签，确保 --latest 能找到上一个版本
             - git-cliff --config cliff.toml --latest --strip header
           exports:
             stdout: RELEASE_NOTES
