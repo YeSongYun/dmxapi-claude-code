@@ -29,7 +29,7 @@ $:
             - git push github ${CNB_BRANCH} --force
         # 1. 生成更新日志（使用 git-cliff 支持 commit 自动分类）
         - name: 生成更新日志
-          image: orhun/git-cliff
+          image: orhunp/git-cliff
           script:
             - git-cliff --config cliff.toml --latest --strip header -o CHANGELOG.md
             - cat CHANGELOG.md
