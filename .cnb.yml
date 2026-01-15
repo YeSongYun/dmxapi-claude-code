@@ -31,6 +31,7 @@ $:
         - name: 生成更新日志
           image: orhunp/git-cliff
           script:
+            - apk add --no-cache git  # git-cliff 镜像中没有 git，需要先安装
             - git fetch --tags origin  # 获取所有标签，确保 --latest 能找到上一个版本
             - git-cliff --config cliff.toml --latest --strip header
           exports:
