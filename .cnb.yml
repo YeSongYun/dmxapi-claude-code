@@ -31,10 +31,9 @@ $:
         - name: 生成更新日志
           image: orhunp/git-cliff
           script:
-            - git-cliff --config cliff.toml --latest --strip header -o CHANGELOG.md
-            - cat CHANGELOG.md
+            - git-cliff --config cliff.toml --latest --strip header
           exports:
-            CHANGELOG.md: RELEASE_NOTES
+            stdout: RELEASE_NOTES
 
         # 2. 编译各平台二进制文件
         - name: 编译 Windows AMD64
