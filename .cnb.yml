@@ -6,6 +6,9 @@
 main:
   push:
     - imports: https://cnb.cool/dmxapi/claude-code-my/-/blob/main/env.yml
+      runner:
+        tags: cnb:arch:amd64
+        cpus: 1
       stages:
         - name: sync to github with rebase
           image: tencentcom/git-sync
@@ -20,6 +23,9 @@ main:
 $:
   tag_push:
     - imports: https://cnb.cool/dmxapi/claude-code-my/-/blob/main/env.yml
+      runner:
+        tags: cnb:arch:amd64
+        cpus: 1
       stages:
         # 0. 先同步 Tag 到 GitHub
         - name: sync tag to github
