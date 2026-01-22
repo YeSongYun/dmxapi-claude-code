@@ -46,10 +46,10 @@ jobs:
           CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o dmxapi-claude-code-${VERSION}-linux-arm64
 
           # macOS AMD64
-          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o dmxapi-claude-code-${VERSION}-darwin-amd64
+          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o dmxapi-claude-code-${VERSION}-macos-amd64
 
           # macOS ARM64
-          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o dmxapi-claude-code-${VERSION}-darwin-arm64
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o dmxapi-claude-code-${VERSION}-macos-arm64
 
       # 创建增强的 Release
       - name: Create Release
@@ -74,8 +74,8 @@ jobs:
             | Windows | x64 | `dmxapi-claude-code-${{ github.ref_name }}-windows-amd64.exe` |
             | Linux | x64 | `dmxapi-claude-code-${{ github.ref_name }}-linux-amd64` |
             | Linux | ARM64 | `dmxapi-claude-code-${{ github.ref_name }}-linux-arm64` |
-            | macOS | Intel | `dmxapi-claude-code-${{ github.ref_name }}-darwin-amd64` |
-            | macOS | Apple Silicon | `dmxapi-claude-code-${{ github.ref_name }}-darwin-arm64` |
+            | macOS | Intel | `dmxapi-claude-code-${{ github.ref_name }}-macos-amd64` |
+            | macOS | Apple Silicon | `dmxapi-claude-code-${{ github.ref_name }}-macos-arm64` |
 
             ---
 
@@ -97,9 +97,9 @@ jobs:
             #### macOS
             ```bash
             # 下载并添加执行权限
-            chmod +x dmxapi-claude-code-${{ github.ref_name }}-darwin-arm64
+            chmod +x dmxapi-claude-code-${{ github.ref_name }}-macos-arm64
             # 首次运行可能需要在"系统设置 > 隐私与安全性"中允许
-            ./dmxapi-claude-code-${{ github.ref_name }}-darwin-arm64
+            ./dmxapi-claude-code-${{ github.ref_name }}-macos-arm64
             ```
 
             ---
@@ -123,5 +123,5 @@ jobs:
             dmxapi-claude-code-${{ github.ref_name }}-windows-amd64.exe
             dmxapi-claude-code-${{ github.ref_name }}-linux-amd64
             dmxapi-claude-code-${{ github.ref_name }}-linux-arm64
-            dmxapi-claude-code-${{ github.ref_name }}-darwin-amd64
-            dmxapi-claude-code-${{ github.ref_name }}-darwin-arm64
+            dmxapi-claude-code-${{ github.ref_name }}-macos-amd64
+            dmxapi-claude-code-${{ github.ref_name }}-macos-arm64

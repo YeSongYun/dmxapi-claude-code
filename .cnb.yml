@@ -56,12 +56,12 @@ $:
         - name: 编译 macOS AMD64
           image: golang:1.21
           script:
-            - CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o dmxapi-claude-code-${CNB_BRANCH}-darwin-amd64
+            - CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o dmxapi-claude-code-${CNB_BRANCH}-macos-amd64
 
         - name: 编译 macOS ARM64
           image: golang:1.21
           script:
-            - CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o dmxapi-claude-code-${CNB_BRANCH}-darwin-arm64
+            - CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o dmxapi-claude-code-${CNB_BRANCH}-macos-arm64
 
         # 3. 先创建 Release（必须在上传附件之前）
         - name: 创建 Release
@@ -86,8 +86,8 @@ $:
               | Windows | x64 | `dmxapi-claude-code-${CNB_BRANCH}-windows-amd64.exe` |
               | Linux | x64 | `dmxapi-claude-code-${CNB_BRANCH}-linux-amd64` |
               | Linux | ARM64 | `dmxapi-claude-code-${CNB_BRANCH}-linux-arm64` |
-              | macOS | Intel | `dmxapi-claude-code-${CNB_BRANCH}-darwin-amd64` |
-              | macOS | Apple Silicon | `dmxapi-claude-code-${CNB_BRANCH}-darwin-arm64` |
+              | macOS | Intel | `dmxapi-claude-code-${CNB_BRANCH}-macos-amd64` |
+              | macOS | Apple Silicon | `dmxapi-claude-code-${CNB_BRANCH}-macos-arm64` |
 
               ---
 
@@ -109,9 +109,9 @@ $:
               #### macOS
               ```bash
               # 下载并添加执行权限
-              chmod +x dmxapi-claude-code-${CNB_BRANCH}-darwin-arm64
+              chmod +x dmxapi-claude-code-${CNB_BRANCH}-macos-arm64
               # 首次运行可能需要在"系统设置 > 隐私与安全性"中允许
-              ./dmxapi-claude-code-${CNB_BRANCH}-darwin-arm64
+              ./dmxapi-claude-code-${CNB_BRANCH}-macos-arm64
               ```
 
               ---
