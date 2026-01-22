@@ -276,8 +276,20 @@ func setEnvVarsUnix(vars map[string]string) error {
 	// 写入配置文件
 	for _, configFile := range configFiles {
 		configPath := filepath.Join(homeDir, configFile)
-		if _, err := os.Stat(configPath); os.IsNotExist(err) {
-			continue
+
+		// macOS 特殊处理：如果是 .zshrc 且不存在，则创建
+		if runtime.GOOS == "darwin" && configFile == ".zshrc" {
+			if _, err := os.Stat(configPath); os.IsNotExist(err) {
+				// 创建空的 .zshrc 文件
+				if err := os.WriteFile(configPath, []byte(""), 0644); err != nil {
+					return fmt.Errorf("创建 %s 失败: %v", configPath, err)
+				}
+			}
+		} else {
+			// 其他文件：不存在则跳过
+			if _, err := os.Stat(configPath); os.IsNotExist(err) {
+				continue
+			}
 		}
 
 		content, err := os.ReadFile(configPath)
@@ -666,6 +678,9 @@ func printSummary(cfg Config) {
 	case "windows":
 		printInfo("配置已保存到用户环境变量")
 		printInfo("请重新打开终端窗口使配置生效")
+	case "darwin":
+		printInfo("配置已保存到 shell 配置文件")
+		printInfo("请运行 'source ~/.zshrc' 或重新打开终端使配置生效")
 	default:
 		printInfo("配置已保存到 shell 配置文件")
 		printInfo("请运行 'source ~/.bashrc' 或重新打开终端使配置生效")
