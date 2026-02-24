@@ -20,38 +20,22 @@ main:
             password: ${GIT_ACCESS_TOKEN}
             sync_mode: rebase
   pull_request:
-      - name: "AI 代码初审"
-        imports: https://cnb.cool/dmxapi/claude-code-my/-/blob/main/env.yml
-        runner:
-          tags: cnb:arch:amd64
-          cpus: 1
-        stages:
-          - name: code-review
-            image: cnbcool/code-review:latest
-            settings:
-              output: ./code_review.json
-              context: 100
-              comment: true
-              max_comments: 10
-              max_files: 300
-              max_diff_size: 128000
-              fail_on_critical: true
-
-      - name: "AI 代码复审"
-        imports: https://cnb.cool/dmxapi/claude-code-my/-/blob/main/env.yml
-        runner:
-          tags: cnb:arch:amd64
-          cpus: 1
-        stages:
-          - name: ai-review
-            image: cnbcool/ai-review:latest
-            settings:
-              type: code-review
-              ai_chat_url: ${AI_CHAT_URL}
-              ai_token: ${AI_TOKEN}
-              ai_model: ${AI_MODEL}
-              pr_comment: true
-              max_comments: 50
+    - name: "AI 代码评审"
+      imports: https://cnb.cool/dmxapi/claude-code-my/-/blob/main/env.yml
+      runner:
+        tags: cnb:arch:amd64
+        cpus: 4
+      stages:
+        - name: code-review
+          image: cnbcool/code-review:latest
+          settings:
+            context: 50
+            verbose: true
+            comment: true
+            max_comments: 50
+            max_files: 150
+            max_diff_size: 200000
+            fail_on_critical: true
 
 # Tag 推送 - 自动发布 Release
 $:
