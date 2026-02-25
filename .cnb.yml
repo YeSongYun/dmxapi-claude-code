@@ -147,7 +147,10 @@ $:
               | `ANTHROPIC_BASE_URL` | API 服务器地址 |
               | `ANTHROPIC_AUTH_TOKEN` | API 认证令牌 |
               | `ANTHROPIC_MODEL` | 默认模型 |
-              | `ANTHROPIC_SMALL_FAST_MODEL` | 小型快速模型 |
+              | `ANTHROPIC_DEFAULT_HAIKU_MODEL` | Haiku 小型快速模型 |
+              | `ANTHROPIC_DEFAULT_SONNET_MODEL` | Sonnet 标准模型 |
+              | `ANTHROPIC_DEFAULT_OPUS_MODEL` | Opus 高级模型 |
+              | `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` | 禁用实验性 Beta 功能（固定为 1）|
 
               ---
 
