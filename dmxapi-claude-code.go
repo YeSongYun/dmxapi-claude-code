@@ -35,13 +35,16 @@ const (
 	envModel       = "ANTHROPIC_MODEL"
 	envHaikuModel  = "ANTHROPIC_DEFAULT_HAIKU_MODEL"
 	envSonnetModel = "ANTHROPIC_DEFAULT_SONNET_MODEL"
-	envOpusModel   = "ANTHROPIC_DEFAULT_OPUS_MODEL"
+	envOpusModel               = "ANTHROPIC_DEFAULT_OPUS_MODEL"
+	envDisableExperimentalBetas = "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"
 
 	// 默认模型值
 	defaultModel       = "claude-sonnet-4-6-cc"
 	defaultHaikuModel  = "claude-haiku-4-5-20251001-cc"
 	defaultSonnetModel = "claude-sonnet-4-6-cc"
 	defaultOpusModel   = "claude-opus-4-6-cc"
+
+	fixedDisableExperimentalBetas = "1"
 )
 
 // 颜色代码
@@ -640,7 +643,8 @@ func saveConfig(cfg Config) error {
 		envModel:       cfg.Model,
 		envHaikuModel:  cfg.HaikuModel,
 		envSonnetModel: cfg.SonnetModel,
-		envOpusModel:   cfg.OpusModel,
+		envOpusModel:               cfg.OpusModel,
+		envDisableExperimentalBetas: fixedDisableExperimentalBetas,
 	}
 
 	// 设置当前进程环境变量
@@ -666,12 +670,13 @@ func printSummary(cfg Config) {
 	printSuccess("配置完成!")
 	fmt.Println(strings.Repeat("=", 50))
 	fmt.Println()
-	fmt.Printf("  %-35s = %s\n", envBaseURL, cfg.BaseURL)
-	fmt.Printf("  %-35s = %s\n", envAuthToken, maskToken(cfg.AuthToken))
-	fmt.Printf("  %-35s = %s\n", envModel, cfg.Model)
-	fmt.Printf("  %-35s = %s\n", envHaikuModel, cfg.HaikuModel)
-	fmt.Printf("  %-35s = %s\n", envSonnetModel, cfg.SonnetModel)
-	fmt.Printf("  %-35s = %s\n", envOpusModel, cfg.OpusModel)
+	fmt.Printf("  %-40s = %s\n", envBaseURL, cfg.BaseURL)
+	fmt.Printf("  %-40s = %s\n", envAuthToken, maskToken(cfg.AuthToken))
+	fmt.Printf("  %-40s = %s\n", envModel, cfg.Model)
+	fmt.Printf("  %-40s = %s\n", envHaikuModel, cfg.HaikuModel)
+	fmt.Printf("  %-40s = %s\n", envSonnetModel, cfg.SonnetModel)
+	fmt.Printf("  %-40s = %s\n", envOpusModel, cfg.OpusModel)
+	fmt.Printf("  %-40s = %s\n", envDisableExperimentalBetas, fixedDisableExperimentalBetas)
 	fmt.Println()
 
 	switch runtime.GOOS {
