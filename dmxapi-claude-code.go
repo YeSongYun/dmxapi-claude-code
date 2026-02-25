@@ -38,10 +38,10 @@ const (
 	envOpusModel   = "ANTHROPIC_DEFAULT_OPUS_MODEL"
 
 	// 默认模型值
-	defaultModel       = "claude-opus-4-5-20251101-cc"
+	defaultModel       = "claude-sonnet-4-6-cc"
 	defaultHaikuModel  = "claude-haiku-4-5-20251001-cc"
-	defaultSonnetModel = "claude-sonnet-4-5-20250929-cc"
-	defaultOpusModel   = "claude-opus-4-5-20251101-cc"
+	defaultSonnetModel = "claude-sonnet-4-6-cc"
+	defaultOpusModel   = "claude-opus-4-6-cc"
 )
 
 // 颜色代码
