@@ -111,32 +111,48 @@ $:
               | Linux | x64 | `dmxapi-claude-code-${CNB_BRANCH}-linux-amd64` |
               | Linux | ARM64 | `dmxapi-claude-code-${CNB_BRANCH}-linux-arm64` |
               | macOS | Intel | `dmxapi-claude-code-${CNB_BRANCH}-macos-amd64` |
-              | macOS | Apple Silicon | `dmxapi-claude-code-${CNB_BRANCH}-macos-arm64` |
+              | macOS | Apple Silicon (M1/M2/M3/M4) | `dmxapi-claude-code-${CNB_BRANCH}-macos-arm64` |
 
               ---
 
               ### 🛠️ 安装说明
 
-              #### Windows
+              #### Windows x64
               ```powershell
               # 下载后直接运行
               .\dmxapi-claude-code-${CNB_BRANCH}-windows-amd64.exe
               ```
 
-              #### Linux
+              #### Linux x64 (amd64)
               ```bash
-              # 下载并添加执行权限
               chmod +x dmxapi-claude-code-${CNB_BRANCH}-linux-amd64
               ./dmxapi-claude-code-${CNB_BRANCH}-linux-amd64
               ```
 
-              #### macOS
+              #### Linux ARM64（树莓派、Graviton 等）
               ```bash
-              # 下载并添加执行权限
+              chmod +x dmxapi-claude-code-${CNB_BRANCH}-linux-arm64
+              ./dmxapi-claude-code-${CNB_BRANCH}-linux-arm64
+              ```
+
+              #### macOS Apple Silicon (M1/M2/M3/M4, arm64)
+              ```bash
               chmod +x dmxapi-claude-code-${CNB_BRANCH}-macos-arm64
-              # 首次运行可能需要在"系统设置 > 隐私与安全性"中允许
               ./dmxapi-claude-code-${CNB_BRANCH}-macos-arm64
               ```
+
+              #### macOS Intel (amd64)
+              ```bash
+              chmod +x dmxapi-claude-code-${CNB_BRANCH}-macos-amd64
+              ./dmxapi-claude-code-${CNB_BRANCH}-macos-amd64
+              ```
+
+              #### macOS Gatekeeper 安全限制
+              首次运行提示"无法验证开发者"时，执行以下命令移除隔离标记后重新运行：
+              ```bash
+              xattr -cr <文件名>
+              ```
+              > 详细说明参见 [README](https://github.com/YeSongYun/dmxapi-claude-code/blob/main/README.md#macos-gatekeeper-安全限制处理)
 
               ---
 
