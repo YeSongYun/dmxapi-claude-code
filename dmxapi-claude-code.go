@@ -340,14 +340,9 @@ func styledPassword(label string) string {
 	return strings.TrimSpace(input)
 }
 
-// styledConfirm 带样式提示符的确认（y/N）
+// styledConfirm 带样式提示符的确认菜单
 func styledConfirm(label string) bool {
-	fmt.Printf("  %s?%s %s%s%s %s(y/N):%s ",
-		colorBrightYellow, colorReset, styleBold, label, colorReset, styleDim, colorReset)
-	reader := bufio.NewReader(os.Stdin)
-	input, _ := reader.ReadString('\n')
-	input = strings.ToLower(strings.TrimSpace(input))
-	return input == "y" || input == "yes"
+	return runConfirmMenu(label)
 }
 
 // ==================== 输入处理 ====================
@@ -901,6 +896,108 @@ func clearMenuLines(n int) {
 		fmt.Printf("\r\033[K\n")
 	}
 	fmt.Printf("\033[%dA", n)
+}
+
+// renderConfirmMenu 渲染确认菜单，返回渲染行数（固定8行）
+// selectedIdx: 0=是, 1=否
+func renderConfirmMenu(question string, selectedIdx int, linesPrinted int) int {
+	if linesPrinted > 0 {
+		fmt.Printf("\033[%dA", linesPrinted)
+	}
+	const innerW = 44
+	border := strings.Repeat("─", innerW)
+	fmt.Printf("╭%s╮\033[K\r\n", border)
+
+	questionW := visibleLength(question)
+	lPad := (innerW - questionW) / 2
+	if lPad < 0 {
+		lPad = 0
+	}
+	rPad := innerW - questionW - lPad
+	if rPad < 0 {
+		rPad = 0
+	}
+	fmt.Printf("│%s%s%s%s%s│\033[K\r\n",
+		strings.Repeat(" ", lPad), styleBold+colorBrightWhite, question, colorReset, strings.Repeat(" ", rPad))
+	fmt.Printf("├%s┤\033[K\r\n", border)
+
+	labels := [2]string{"是", "否"}
+	descs := [2]string{"确认修改", "保持当前值不变"}
+	for i := 0; i < 2; i++ {
+		label := labels[i]
+		desc := descs[i]
+		pad := innerW - 5 - visibleLength(label) - visibleLength(desc)
+		if pad < 0 {
+			pad = 0
+		}
+		if i == selectedIdx {
+			fmt.Printf("│ %s❯ %s%s  %s%s%s%s│\033[K\r\n",
+				colorBrightCyan+styleBold,
+				label, colorReset,
+				colorBrightCyan, desc, colorReset,
+				strings.Repeat(" ", pad))
+		} else {
+			fmt.Printf("│ %s  %s%s  %s%s%s%s│\033[K\r\n",
+				styleDim,
+				label, colorReset,
+				styleDim, desc, colorReset,
+				strings.Repeat(" ", pad))
+		}
+	}
+
+	fmt.Printf("╰%s╯\033[K\r\n", border)
+	fmt.Printf("\033[K\r\n")
+	fmt.Printf("  %s↑↓ 导航%s  %sEnter 确认%s\033[K\r\n",
+		styleDim, colorReset, styleDim, colorReset)
+	return 8
+}
+
+// runConfirmMenu 运行确认菜单，返回是否确认（true=是，false=否）
+// 默认选中"否"（与原来 y/N 默认 No 行为一致）
+func runConfirmMenu(question string) bool {
+	restore, err := enterRawMode()
+	if err != nil {
+		// 降级：非终端时用数字选项
+		printMenu(question, []MenuItem{
+			{"1", "是", "确认修改"},
+			{"2", "否", "保持当前值不变"},
+		})
+		fmt.Println()
+		for {
+			input := styledInput("选项")
+			switch input {
+			case "1":
+				return true
+			case "2":
+				return false
+			default:
+				printError("请输入 1 或 2")
+			}
+		}
+	}
+	defer restore()
+
+	selectedIdx := 1 // 默认"否"
+	linesPrinted := 0
+
+	for {
+		linesPrinted = renderConfirmMenu(question, selectedIdx, linesPrinted)
+		key := readRawKey()
+		switch key {
+		case KeyUp:
+			selectedIdx = (selectedIdx - 1 + 2) % 2
+		case KeyDown:
+			selectedIdx = (selectedIdx + 1) % 2
+		case KeyEnter:
+			restore()
+			clearMenuLines(linesPrinted)
+			return selectedIdx == 0
+		case KeyEsc:
+			restore()
+			clearMenuLines(linesPrinted)
+			return false
+		}
+	}
 }
 
 // renderL1Menu 渲染一级菜单，返回渲染行数（固定10行）
