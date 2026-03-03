@@ -909,14 +909,14 @@ func renderL1Menu(entries []modelTypeEntry, selectedIdx int, linesPrinted int) i
 		fmt.Printf("\033[%dA", linesPrinted)
 	}
 	border := strings.Repeat("─", 60)
-	fmt.Printf("╭%s╮\033[K\n", border)
+	fmt.Printf("╭%s╮\033[K\r\n", border)
 	title := "选择要配置的模型"
 	titleW := visibleLength(title)
 	lPad := (60 - titleW) / 2
 	rPad := 60 - titleW - lPad
-	fmt.Printf("│%s%s%s%s%s│\033[K\n",
+	fmt.Printf("│%s%s%s%s%s│\033[K\r\n",
 		strings.Repeat(" ", lPad), styleBold+colorBrightWhite, title, colorReset, strings.Repeat(" ", rPad))
-	fmt.Printf("├%s┤\033[K\n", border)
+	fmt.Printf("├%s┤\033[K\r\n", border)
 
 	// 计算所有标签的最大显示宽度
 	maxLabelW := 0
@@ -935,13 +935,13 @@ func renderL1Menu(entries []modelTypeEntry, selectedIdx int, linesPrinted int) i
 			pad = 0
 		}
 		if i == selectedIdx {
-			fmt.Printf("│ %s❯ %s%s%s  %s%s%s%s│\033[K\n",
+			fmt.Printf("│ %s❯ %s%s%s  %s%s%s%s│\033[K\r\n",
 				colorBrightCyan+styleBold,
 				label, labelFill, colorReset,
 				colorBrightCyan, val, colorReset,
 				strings.Repeat(" ", pad))
 		} else {
-			fmt.Printf("│ %s  %s%s%s  %s%s%s%s│\033[K\n",
+			fmt.Printf("│ %s  %s%s%s  %s%s%s%s│\033[K\r\n",
 				styleDim,
 				label, labelFill, colorReset,
 				styleDim, val, colorReset,
@@ -949,9 +949,9 @@ func renderL1Menu(entries []modelTypeEntry, selectedIdx int, linesPrinted int) i
 		}
 	}
 
-	fmt.Printf("╰%s╯\033[K\n", border)
-	fmt.Printf("\033[K\n")
-	fmt.Printf("  %s↑↓ 导航%s  %sEnter 配置%s  %sq 保存退出%s\033[K\n",
+	fmt.Printf("╰%s╯\033[K\r\n", border)
+	fmt.Printf("\033[K\r\n")
+	fmt.Printf("  %s↑↓ 导航%s  %sEnter 配置%s  %sq 保存退出%s\033[K\r\n",
 		styleDim, colorReset, styleDim, colorReset, styleDim, colorReset)
 	return 10
 }
@@ -962,14 +962,14 @@ func renderL2Menu(typeName string, currentValue string, selectedIdx int, linesPr
 		fmt.Printf("\033[%dA", linesPrinted)
 	}
 	border := strings.Repeat("─", 60)
-	fmt.Printf("╭%s╮\033[K\n", border)
+	fmt.Printf("╭%s╮\033[K\r\n", border)
 	title := fmt.Sprintf("选择 %s", typeName)
 	titleW := visibleLength(title)
 	lPad := (60 - titleW) / 2
 	rPad := 60 - titleW - lPad
-	fmt.Printf("│%s%s%s%s%s│\033[K\n",
+	fmt.Printf("│%s%s%s%s%s│\033[K\r\n",
 		strings.Repeat(" ", lPad), styleBold+colorBrightWhite, title, colorReset, strings.Repeat(" ", rPad))
-	fmt.Printf("├%s┤\033[K\n", border)
+	fmt.Printf("├%s┤\033[K\r\n", border)
 
 	for i, m := range presetModels {
 		isCurrent := (m == currentValue)
@@ -989,13 +989,13 @@ func renderL2Menu(typeName string, currentValue string, selectedIdx int, linesPr
 			pad = 0
 		}
 		if isSelected {
-			fmt.Printf("│ %s❯%s %s%s%s%s %s│\033[K\n",
+			fmt.Printf("│ %s❯%s %s%s%s%s %s│\033[K\r\n",
 				colorBrightCyan+styleBold, colorReset,
 				colorBrightCyan, name, colorReset,
 				strings.Repeat(" ", pad),
 				check)
 		} else {
-			fmt.Printf("│   %s%s%s%s %s│\033[K\n",
+			fmt.Printf("│   %s%s%s%s %s│\033[K\r\n",
 				styleDim, name, colorReset,
 				strings.Repeat(" ", pad),
 				check)
@@ -1006,19 +1006,19 @@ func renderL2Menu(typeName string, currentValue string, selectedIdx int, linesPr
 	customText := "✏ 自定义输入..."
 	customPad := 60 - 3 - visibleLength(customText) // = 42
 	if selectedIdx == 10 {
-		fmt.Printf("│ %s❯%s %s%s%s%s│\033[K\n",
+		fmt.Printf("│ %s❯%s %s%s%s%s│\033[K\r\n",
 			colorBrightCyan+styleBold, colorReset,
 			colorBrightYellow, customText, colorReset,
 			strings.Repeat(" ", customPad))
 	} else {
-		fmt.Printf("│   %s%s%s%s│\033[K\n",
+		fmt.Printf("│   %s%s%s%s│\033[K\r\n",
 			styleDim, customText, colorReset,
 			strings.Repeat(" ", customPad))
 	}
 
-	fmt.Printf("╰%s╯\033[K\n", border)
-	fmt.Printf("\033[K\n")
-	fmt.Printf("  %s↑↓ 导航%s  %sEnter 确认%s  %sq 返回%s\033[K\n",
+	fmt.Printf("╰%s╯\033[K\r\n", border)
+	fmt.Printf("\033[K\r\n")
+	fmt.Printf("  %s↑↓ 导航%s  %sEnter 确认%s  %sq 返回%s\033[K\r\n",
 		styleDim, colorReset, styleDim, colorReset, styleDim, colorReset)
 	return 17
 }
