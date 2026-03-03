@@ -704,7 +704,7 @@ func getNewAuthToken(existing, hostname string) string {
 	}
 
 	if existing != "" {
-		fmt.Println("  当前已配置 Token")
+		fmt.Printf("  当前已配置 Token: %s\n", maskToken(existing))
 		if !styledConfirm("是否更新 Token") {
 			return existing
 		}
