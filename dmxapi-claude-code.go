@@ -700,11 +700,12 @@ func getNewAuthToken(existing, hostname string) string {
 }
 
 // selectConfigMode 选择配置模式
-// 返回值: 1 = 完整配置, 2 = 仅配置模型
+// 返回值: 1 = 完整配置, 2 = 仅配置模型, 3 = 仅禁用 Betas
 func selectConfigMode() int {
 	printMenu("配置模式选择", []MenuItem{
 		{"1", "完整配置", "配置 URL、Token 和模型"},
 		{"2", "仅配置模型", "跳过 URL 和 Token 配置"},
+		{"3", "仅禁用 Betas", "设置 DISABLE_EXPERIMENTAL_BETAS=1"},
 	})
 	fmt.Println()
 
@@ -715,8 +716,10 @@ func selectConfigMode() int {
 			return 1
 		case "2":
 			return 2
+		case "3":
+			return 3
 		default:
-			printError("无效选项，请输入 1 或 2")
+			printError("无效选项，请输入 1、2 或 3")
 		}
 	}
 }
@@ -965,6 +968,11 @@ func main() {
 			break
 		}
 		printSuccess("API 连接验证成功!")
+	} else if configMode == 3 {
+		// 仅禁用 Betas 模式：无需任何输入，直接跳到保存
+		printSectionHeader("快速配置 Disable Betas")
+		printInfo("将写入 CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1，其余配置保持不变")
+		fmt.Println()
 	} else {
 		// 仅配置模型模式
 		if cfg.BaseURL == "" || cfg.AuthToken == "" {
@@ -978,8 +986,10 @@ func main() {
 		fmt.Println()
 	}
 
-	// 配置模型
-	configureModels(&cfg)
+	// 配置模型（模式 3 直接跳过）
+	if configMode != 3 {
+		configureModels(&cfg)
+	}
 
 	// 保存配置（带动画）
 	fmt.Println()
