@@ -700,12 +700,12 @@ func getNewAuthToken(existing, hostname string) string {
 }
 
 // selectConfigMode 选择配置模式
-// 返回值: 1 = 完整配置, 2 = 仅配置模型, 3 = 仅禁用 Betas
+// 返回值: 1 = 从头配置, 2 = 仅配置模型, 3 = 解决 400 报错
 func selectConfigMode() int {
 	printMenu("配置模式选择", []MenuItem{
-		{"1", "完整配置", "配置 URL、Token 和模型"},
+		{"1", "从头配置", "配置 URL、Token 和模型"},
 		{"2", "仅配置模型", "跳过 URL 和 Token 配置"},
-		{"3", "仅禁用 Betas", "解决 claude code 400 传入请求头错误问题"},
+		{"3", "解决 400 报错", "禁用实验性请求头"},
 	})
 	fmt.Println()
 
@@ -925,7 +925,7 @@ func main() {
 
 	// 根据配置模式执行不同流程
 	if configMode == 1 {
-		// 完整配置模式
+		// 从头配置模式
 		// 配置 Base URL
 		cfg.BaseURL = getNewBaseURL(cfg.BaseURL)
 
@@ -969,7 +969,7 @@ func main() {
 		}
 		printSuccess("API 连接验证成功!")
 	} else if configMode == 3 {
-		// 仅禁用 Betas 模式：无需任何输入，直接跳到保存
+		// 解决 400 报错模式：无需任何输入，直接跳到保存
 		printSectionHeader("修复 Claude Code 400 请求头错误")
 		printInfo("禁用实验性请求头，解决 Claude Code 400 传入请求头错误问题")
 		fmt.Println()
