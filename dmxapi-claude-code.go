@@ -911,37 +911,41 @@ func renderL1Menu(entries []modelTypeEntry, selectedIdx int, linesPrinted int) i
 	border := strings.Repeat("─", 60)
 	fmt.Printf("╭%s╮\033[K\n", border)
 	title := "选择要配置的模型"
-	titleW := len([]rune(title))
+	titleW := visibleLength(title)
 	lPad := (60 - titleW) / 2
 	rPad := 60 - titleW - lPad
 	fmt.Printf("│%s%s%s%s%s│\033[K\n",
 		strings.Repeat(" ", lPad), styleBold+colorBrightWhite, title, colorReset, strings.Repeat(" ", rPad))
 	fmt.Printf("├%s┤\033[K\n", border)
 
-	labels := []string{"默认模型  ", "Haiku 模型", "Sonnet 模型", "Opus 模型 "}
+	// 计算所有标签的最大显示宽度
+	maxLabelW := 0
+	for _, e := range entries {
+		if w := visibleLength(e.Label); w > maxLabelW {
+			maxLabelW = w
+		}
+	}
+
 	for i, entry := range entries {
+		label := entry.Label
+		labelFill := strings.Repeat(" ", maxLabelW-visibleLength(label))
 		val := truncateStr(*entry.ValuePtr, 35)
+		pad := 55 - maxLabelW - visibleLength(val)
+		if pad < 0 {
+			pad = 0
+		}
 		if i == selectedIdx {
-			content := fmt.Sprintf("%s❯%s %s%-10s%s  %s%s%s",
-				colorBrightCyan+styleBold, colorReset,
-				colorBrightCyan+styleBold, labels[i], colorReset,
-				colorBrightCyan, val, colorReset)
-			contentW := 2 + 10 + 2 + len(val)
-			pad := 60 - contentW - 2
-			if pad < 0 {
-				pad = 0
-			}
-			fmt.Printf("│ %s%s│\033[K\n", content, strings.Repeat(" ", pad))
+			fmt.Printf("│ %s❯ %s%s%s  %s%s%s%s│\033[K\n",
+				colorBrightCyan+styleBold,
+				label, labelFill, colorReset,
+				colorBrightCyan, val, colorReset,
+				strings.Repeat(" ", pad))
 		} else {
-			content := fmt.Sprintf("%s  %-10s%s  %s%s%s",
-				styleDim, labels[i], colorReset,
-				styleDim, val, colorReset)
-			contentW := 2 + 10 + 2 + len(val)
-			pad := 60 - contentW - 2
-			if pad < 0 {
-				pad = 0
-			}
-			fmt.Printf("│ %s%s│\033[K\n", content, strings.Repeat(" ", pad))
+			fmt.Printf("│ %s  %s%s%s  %s%s%s%s│\033[K\n",
+				styleDim,
+				label, labelFill, colorReset,
+				styleDim, val, colorReset,
+				strings.Repeat(" ", pad))
 		}
 	}
 
@@ -960,7 +964,7 @@ func renderL2Menu(typeName string, currentValue string, selectedIdx int, linesPr
 	border := strings.Repeat("─", 60)
 	fmt.Printf("╭%s╮\033[K\n", border)
 	title := fmt.Sprintf("选择 %s", typeName)
-	titleW := len([]rune(title))
+	titleW := visibleLength(title)
 	lPad := (60 - titleW) / 2
 	rPad := 60 - titleW - lPad
 	fmt.Printf("│%s%s%s%s%s│\033[K\n",
@@ -970,41 +974,46 @@ func renderL2Menu(typeName string, currentValue string, selectedIdx int, linesPr
 	for i, m := range presetModels {
 		isCurrent := (m == currentValue)
 		isSelected := (i == selectedIdx)
-		check := "  "
+		name := truncateStr(m, 54)
+		nameW := visibleLength(name)
+		var check string
+		checkW := 2
 		if isCurrent {
 			check = fmt.Sprintf("%s✓%s", colorBrightGreen, colorReset)
+			checkW = 1
+		} else {
+			check = "  "
 		}
-		name := truncateStr(m, 48)
-		nameW := len(name)
-		pad := 60 - 2 - nameW - 2 - 2
+		pad := 56 - nameW - checkW
 		if pad < 0 {
 			pad = 0
 		}
 		if isSelected {
-			fmt.Printf("│ %s❯%s %s%-48s%s%s %s│\033[K\n",
+			fmt.Printf("│ %s❯%s %s%s%s%s %s│\033[K\n",
 				colorBrightCyan+styleBold, colorReset,
 				colorBrightCyan, name, colorReset,
 				strings.Repeat(" ", pad),
 				check)
 		} else {
-			fmt.Printf("│   %s%-48s%s%s %s│\033[K\n",
+			fmt.Printf("│   %s%s%s%s %s│\033[K\n",
 				styleDim, name, colorReset,
 				strings.Repeat(" ", pad),
 				check)
 		}
 	}
 
-	// 自定义选项（第11项，索引10）
-	isCustomSelected := (selectedIdx == 10)
-	if isCustomSelected {
-		fmt.Printf("│ %s❯%s %s✏ 自定义输入...%s%s│\033[K\n",
+	// 自定义选项（索引10）
+	customText := "✏ 自定义输入..."
+	customPad := 60 - 3 - visibleLength(customText) // = 42
+	if selectedIdx == 10 {
+		fmt.Printf("│ %s❯%s %s%s%s%s│\033[K\n",
 			colorBrightCyan+styleBold, colorReset,
-			colorBrightYellow, colorReset,
-			strings.Repeat(" ", 60-2-16))
+			colorBrightYellow, customText, colorReset,
+			strings.Repeat(" ", customPad))
 	} else {
-		fmt.Printf("│   %s✏ 自定义输入...%s%s│\033[K\n",
-			styleDim, colorReset,
-			strings.Repeat(" ", 60-2-16))
+		fmt.Printf("│   %s%s%s%s│\033[K\n",
+			styleDim, customText, colorReset,
+			strings.Repeat(" ", customPad))
 	}
 
 	fmt.Printf("╰%s╯\033[K\n", border)
