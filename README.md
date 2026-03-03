@@ -146,6 +146,7 @@ xattr -cr <文件名>
 | `ANTHROPIC_DEFAULT_HAIKU_MODEL` | Haiku 模型 |
 | `ANTHROPIC_DEFAULT_SONNET_MODEL` | Sonnet 模型 |
 | `ANTHROPIC_DEFAULT_OPUS_MODEL` | Opus 模型 |
+| `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` | 禁用实验性 Beta 功能（固定为 1）|
 
 ## 配置生效
 
