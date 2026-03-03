@@ -47,6 +47,19 @@ const (
 	fixedDisableExperimentalBetas = "1"
 )
 
+var presetModels = []string{
+	"claude-opus-4-6-cc",
+	"claude-sonnet-4-6-cc",
+	"claude-haiku-4-5-20251001-cc",
+	"MiniMax-M2.5-cc",
+	"glm-5-cc",
+	"kimi-k2.5-cc",
+	"hunyuan-2.0-thinking-20251109-cc",
+	"qwen3.5-plus-cc",
+	"hunyuan-2.0-instruct-20251111-cc",
+	"DeepSeek-V3.2-cc",
+}
+
 // 颜色代码
 const (
 	colorReset  = "\033[0m"
@@ -249,6 +262,23 @@ type MenuItem struct {
 	Key   string
 	Label string
 	Desc  string
+}
+
+// KeyType 键盘输入类型
+type KeyType int
+
+const (
+	KeyUp    KeyType = iota
+	KeyDown
+	KeyEnter
+	KeyEsc
+	KeyOther
+)
+
+// modelTypeEntry 模型类型条目
+type modelTypeEntry struct {
+	Label    string
+	ValuePtr *string
 }
 
 // printMenu 打印圆角边框菜单
@@ -780,24 +810,305 @@ func inputNewAuthToken(hostname string) string {
 	}
 }
 
-// configureModels 配置模型
-func configureModels(cfg *Config) {
-	printSectionHeader("配置模型设置")
+// ==================== 交互式模型选择 ====================
 
-	// 设置默认值
-	if cfg.Model == "" {
-		cfg.Model = defaultModel
+// enterRawMode 进入终端原始模式，返回恢复函数
+func enterRawMode() (restoreFn func(), err error) {
+	fd := int(syscall.Stdin)
+	if !term.IsTerminal(fd) {
+		return nil, fmt.Errorf("not a terminal")
 	}
-	if cfg.HaikuModel == "" {
-		cfg.HaikuModel = defaultHaikuModel
+	oldState, err := term.MakeRaw(fd)
+	if err != nil {
+		return nil, err
 	}
-	if cfg.SonnetModel == "" {
-		cfg.SonnetModel = defaultSonnetModel
+	return func() {
+		term.Restore(fd, oldState)
+	}, nil
+}
+
+// readRawKey 在已进入 raw 模式的终端中读取一个按键
+func readRawKey() KeyType {
+	buf := make([]byte, 1)
+	os.Stdin.Read(buf)
+	switch buf[0] {
+	case 0x0D, 0x0A:
+		return KeyEnter
+	case 'q', 'Q':
+		return KeyEsc
+	case 0x03: // Ctrl+C
+		os.Exit(0)
+	case 0x1B: // ESC 序列
+		buf2 := make([]byte, 1)
+		n, _ := os.Stdin.Read(buf2)
+		if n == 0 {
+			return KeyOther
+		}
+		if buf2[0] == '[' {
+			buf3 := make([]byte, 1)
+			n2, _ := os.Stdin.Read(buf3)
+			if n2 == 0 {
+				return KeyOther
+			}
+			switch buf3[0] {
+			case 'A':
+				return KeyUp
+			case 'B':
+				return KeyDown
+			}
+		}
+		return KeyOther
+	case 0xE0: // Windows 扩展键
+		if runtime.GOOS == "windows" {
+			buf2 := make([]byte, 1)
+			os.Stdin.Read(buf2)
+			switch buf2[0] {
+			case 0x48:
+				return KeyUp
+			case 0x50:
+				return KeyDown
+			}
+		}
 	}
-	if cfg.OpusModel == "" {
-		cfg.OpusModel = defaultOpusModel
+	return KeyOther
+}
+
+// truncateStr 截断字符串，超过 maxLen 时末尾加省略号
+func truncateStr(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen-1] + "…"
+}
+
+// findPresetIndex 在 presetModels 中查找，找不到返回 -1
+func findPresetIndex(value string) int {
+	for i, m := range presetModels {
+		if m == value {
+			return i
+		}
+	}
+	return -1
+}
+
+// clearMenuLines 清除 n 行菜单内容（上移并清行）
+func clearMenuLines(n int) {
+	if n <= 0 {
+		return
+	}
+	fmt.Printf("\033[%dA", n)
+	for i := 0; i < n; i++ {
+		fmt.Printf("\r\033[K\n")
+	}
+	fmt.Printf("\033[%dA", n)
+}
+
+// renderL1Menu 渲染一级菜单，返回渲染行数（固定10行）
+func renderL1Menu(entries []modelTypeEntry, selectedIdx int, linesPrinted int) int {
+	if linesPrinted > 0 {
+		fmt.Printf("\033[%dA", linesPrinted)
+	}
+	border := strings.Repeat("─", 60)
+	fmt.Printf("╭%s╮\033[K\n", border)
+	title := "选择要配置的模型"
+	titleW := len([]rune(title))
+	lPad := (60 - titleW) / 2
+	rPad := 60 - titleW - lPad
+	fmt.Printf("│%s%s%s%s%s│\033[K\n",
+		strings.Repeat(" ", lPad), styleBold+colorBrightWhite, title, colorReset, strings.Repeat(" ", rPad))
+	fmt.Printf("├%s┤\033[K\n", border)
+
+	labels := []string{"默认模型  ", "Haiku 模型", "Sonnet 模型", "Opus 模型 "}
+	for i, entry := range entries {
+		val := truncateStr(*entry.ValuePtr, 35)
+		if i == selectedIdx {
+			content := fmt.Sprintf("%s❯%s %s%-10s%s  %s%s%s",
+				colorBrightCyan+styleBold, colorReset,
+				colorBrightCyan+styleBold, labels[i], colorReset,
+				colorBrightCyan, val, colorReset)
+			contentW := 2 + 10 + 2 + len(val)
+			pad := 60 - contentW - 2
+			if pad < 0 {
+				pad = 0
+			}
+			fmt.Printf("│ %s%s│\033[K\n", content, strings.Repeat(" ", pad))
+		} else {
+			content := fmt.Sprintf("%s  %-10s%s  %s%s%s",
+				styleDim, labels[i], colorReset,
+				styleDim, val, colorReset)
+			contentW := 2 + 10 + 2 + len(val)
+			pad := 60 - contentW - 2
+			if pad < 0 {
+				pad = 0
+			}
+			fmt.Printf("│ %s%s│\033[K\n", content, strings.Repeat(" ", pad))
+		}
 	}
 
+	fmt.Printf("╰%s╯\033[K\n", border)
+	fmt.Printf("\033[K\n")
+	fmt.Printf("  %s↑↓ 导航%s  %sEnter 配置%s  %sq 保存退出%s\033[K\n",
+		styleDim, colorReset, styleDim, colorReset, styleDim, colorReset)
+	return 10
+}
+
+// renderL2Menu 渲染二级菜单，返回渲染行数（固定17行）
+func renderL2Menu(typeName string, currentValue string, selectedIdx int, linesPrinted int) int {
+	if linesPrinted > 0 {
+		fmt.Printf("\033[%dA", linesPrinted)
+	}
+	border := strings.Repeat("─", 60)
+	fmt.Printf("╭%s╮\033[K\n", border)
+	title := fmt.Sprintf("选择 %s", typeName)
+	titleW := len([]rune(title))
+	lPad := (60 - titleW) / 2
+	rPad := 60 - titleW - lPad
+	fmt.Printf("│%s%s%s%s%s│\033[K\n",
+		strings.Repeat(" ", lPad), styleBold+colorBrightWhite, title, colorReset, strings.Repeat(" ", rPad))
+	fmt.Printf("├%s┤\033[K\n", border)
+
+	for i, m := range presetModels {
+		isCurrent := (m == currentValue)
+		isSelected := (i == selectedIdx)
+		check := "  "
+		if isCurrent {
+			check = fmt.Sprintf("%s✓%s", colorBrightGreen, colorReset)
+		}
+		name := truncateStr(m, 48)
+		nameW := len(name)
+		pad := 60 - 2 - nameW - 2 - 2
+		if pad < 0 {
+			pad = 0
+		}
+		if isSelected {
+			fmt.Printf("│ %s❯%s %s%-48s%s%s %s│\033[K\n",
+				colorBrightCyan+styleBold, colorReset,
+				colorBrightCyan, name, colorReset,
+				strings.Repeat(" ", pad),
+				check)
+		} else {
+			fmt.Printf("│   %s%-48s%s%s %s│\033[K\n",
+				styleDim, name, colorReset,
+				strings.Repeat(" ", pad),
+				check)
+		}
+	}
+
+	// 自定义选项（第11项，索引10）
+	isCustomSelected := (selectedIdx == 10)
+	if isCustomSelected {
+		fmt.Printf("│ %s❯%s %s✏ 自定义输入...%s%s│\033[K\n",
+			colorBrightCyan+styleBold, colorReset,
+			colorBrightYellow, colorReset,
+			strings.Repeat(" ", 60-2-16))
+	} else {
+		fmt.Printf("│   %s✏ 自定义输入...%s%s│\033[K\n",
+			styleDim, colorReset,
+			strings.Repeat(" ", 60-2-16))
+	}
+
+	fmt.Printf("╰%s╯\033[K\n", border)
+	fmt.Printf("\033[K\n")
+	fmt.Printf("  %s↑↓ 导航%s  %sEnter 确认%s  %sq 返回%s\033[K\n",
+		styleDim, colorReset, styleDim, colorReset, styleDim, colorReset)
+	return 17
+}
+
+// runL2Menu 运行二级菜单，返回选中的模型名
+func runL2Menu(typeName, currentValue string) string {
+	restore, err := enterRawMode()
+	if err != nil {
+		// 降级：直接文本输入
+		val := styledInput(typeName + " (输入模型名，留空不改)")
+		if val == "" {
+			return currentValue
+		}
+		return val
+	}
+	defer restore()
+
+	idx := findPresetIndex(currentValue)
+	if idx < 0 {
+		idx = 0
+	}
+	linesPrinted := 0
+
+	for {
+		linesPrinted = renderL2Menu(typeName, currentValue, idx, linesPrinted)
+		key := readRawKey()
+		switch key {
+		case KeyUp:
+			idx = (idx - 1 + 11) % 11
+		case KeyDown:
+			idx = (idx + 1) % 11
+		case KeyEnter:
+			restore()
+			clearMenuLines(linesPrinted)
+			if idx == 10 {
+				// 自定义输入
+				val := styledInput(typeName + " (自定义)")
+				if val == "" {
+					return currentValue
+				}
+				return val
+			}
+			return presetModels[idx]
+		case KeyEsc:
+			restore()
+			clearMenuLines(linesPrinted)
+			return currentValue
+		}
+	}
+}
+
+// runL1Menu 运行一级菜单
+func runL1Menu(cfg *Config) {
+	entries := []modelTypeEntry{
+		{"默认模型", &cfg.Model},
+		{"Haiku 模型", &cfg.HaikuModel},
+		{"Sonnet 模型", &cfg.SonnetModel},
+		{"Opus 模型", &cfg.OpusModel},
+	}
+
+	restore, err := enterRawMode()
+	if err != nil {
+		configureModelsFallback(cfg)
+		return
+	}
+	defer restore()
+
+	selectedIdx := 0
+	linesPrinted := 0
+
+	for {
+		linesPrinted = renderL1Menu(entries, selectedIdx, linesPrinted)
+		key := readRawKey()
+		switch key {
+		case KeyUp:
+			selectedIdx = (selectedIdx - 1 + 4) % 4
+		case KeyDown:
+			selectedIdx = (selectedIdx + 1) % 4
+		case KeyEnter:
+			restore()
+			clearMenuLines(linesPrinted)
+			newVal := runL2Menu(entries[selectedIdx].Label, *entries[selectedIdx].ValuePtr)
+			*entries[selectedIdx].ValuePtr = newVal
+			// 重进 raw 模式
+			var rerr error
+			restore, rerr = enterRawMode()
+			if rerr != nil {
+				restore = func() {}
+			}
+			linesPrinted = 0
+		case KeyEsc:
+			restore()
+			return
+		}
+	}
+}
+
+// configureModelsFallback 降级模型配置（文本输入模式）
+func configureModelsFallback(cfg *Config) {
 	fmt.Println()
 	fmt.Println("当前模型配置:")
 	fmt.Printf("  %-35s = %s\n", envModel, cfg.Model)
@@ -809,7 +1120,6 @@ func configureModels(cfg *Config) {
 		return
 	}
 
-	// 逐个配置模型
 	fmt.Println()
 	input := styledInput("默认模型")
 	if input != "" {
@@ -830,6 +1140,31 @@ func configureModels(cfg *Config) {
 	if input != "" {
 		cfg.OpusModel = input
 	}
+}
+
+// configureModels 配置模型
+func configureModels(cfg *Config) {
+	// 填充默认值
+	if cfg.Model == "" {
+		cfg.Model = defaultModel
+	}
+	if cfg.HaikuModel == "" {
+		cfg.HaikuModel = defaultHaikuModel
+	}
+	if cfg.SonnetModel == "" {
+		cfg.SonnetModel = defaultSonnetModel
+	}
+	if cfg.OpusModel == "" {
+		cfg.OpusModel = defaultOpusModel
+	}
+
+	printSectionHeader("配置模型设置")
+	fmt.Println()
+
+	runL1Menu(cfg)
+
+	fmt.Println()
+	printSuccess("模型配置已完成")
 }
 
 // saveConfig 保存配置（批量设置，一次系统调用）
