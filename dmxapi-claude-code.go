@@ -55,6 +55,23 @@ const (
 	colorYellow = "\033[33m"
 	colorBlue   = "\033[34m"
 	colorCyan   = "\033[36m"
+	// 亮色系
+	colorBrightRed     = "\033[91m"
+	colorBrightGreen   = "\033[92m"
+	colorBrightYellow  = "\033[93m"
+	colorBrightBlue    = "\033[94m"
+	colorBrightMagenta = "\033[95m"
+	colorBrightCyan    = "\033[96m"
+	colorBrightWhite   = "\033[97m"
+	colorMagenta       = "\033[35m"
+	colorWhite         = "\033[37m"
+	// 文字样式
+	styleBold = "\033[1m"
+	styleDim  = "\033[2m"
+	// 版本号
+	appVersion = "1.0.0"
+	// 统一盒子内容宽度（不含左右边框字符）
+	boxWidth = 60
 )
 
 // Config 存储所有配置项
@@ -81,22 +98,22 @@ func printColor(color, text string) {
 
 // printSuccess 打印成功信息
 func printSuccess(text string) {
-	printColor(colorGreen, "✓ "+text+"\n")
+	fmt.Printf("%s%s✔%s %s\n", colorReset, colorBrightGreen, colorReset, text)
 }
 
 // printError 打印错误信息
 func printError(text string) {
-	printColor(colorRed, "✗ "+text+"\n")
+	fmt.Printf("%s%s✘%s %s%s%s\n", colorReset, colorBrightRed, colorReset, colorBrightRed, text, colorReset)
 }
 
 // printWarning 打印警告信息
 func printWarning(text string) {
-	printColor(colorYellow, "⚠ "+text+"\n")
+	fmt.Printf("%s%s⚠%s %s%s%s\n", colorReset, colorBrightYellow, colorReset, colorBrightYellow, text, colorReset)
 }
 
 // printInfo 打印信息
 func printInfo(text string) {
-	printColor(colorCyan, "→ "+text+"\n")
+	fmt.Printf("%s%s→%s %s\n", colorReset, colorBrightCyan, colorReset, text)
 }
 
 // runWithSpinner 带旋转动画执行任务
@@ -112,7 +129,7 @@ func runWithSpinner(message string, task func() error) error {
 			case <-done:
 				return
 			default:
-				fmt.Printf("\r%s%s %s%s", colorCyan, spinner[i], message, colorReset)
+				fmt.Printf("\r  %s%s%s %s%s%s", styleBold+colorBrightCyan, spinner[i], colorReset, colorBrightWhite, message, colorReset)
 				i = (i + 1) % len(spinner)
 				time.Sleep(80 * time.Millisecond)
 			}
@@ -122,8 +139,185 @@ func runWithSpinner(message string, task func() error) error {
 	err = task()
 	done <- true
 
-	fmt.Print("\r" + strings.Repeat(" ", 50) + "\r")
+	fmt.Print("\r" + strings.Repeat(" ", 70) + "\r")
 	return err
+}
+
+// ==================== 终端 UI 组件 ====================
+
+// visibleLength 计算字符串在终端中的可见宽度（ANSI 感知 + CJK 双宽度）
+func visibleLength(s string) int {
+	inEscape := false
+	count := 0
+	for _, r := range s {
+		if r == '\033' {
+			inEscape = true
+			continue
+		}
+		if inEscape {
+			if r == 'm' {
+				inEscape = false
+			}
+			continue
+		}
+		// CJK 统一汉字区间，占 2 格
+		if (r >= 0x4E00 && r <= 0x9FFF) ||
+			(r >= 0x3400 && r <= 0x4DBF) ||
+			(r >= 0xFF00 && r <= 0xFFEF) ||
+			(r >= 0x3000 && r <= 0x303F) {
+			count += 2
+		} else {
+			count++
+		}
+	}
+	return count
+}
+
+// printLogo 打印 ASCII Art Logo
+func printLogo() {
+	if runtime.GOOS == "windows" {
+		fmt.Println()
+		fmt.Println(colorCyan + styleBold + "  === DMXAPI ===" + colorReset)
+		fmt.Println(styleDim + "  Claude Code CLI 配置工具" + colorReset)
+		fmt.Printf("  %s%s/%s%s\n\n", colorMagenta, runtime.GOOS, runtime.GOARCH, colorReset)
+		return
+	}
+	logo := []string{
+		`██████╗ ███╗   ███╗██╗  ██╗ █████╗ ██████╗ ██╗`,
+		`██╔══██╗████╗ ████║╚██╗██╔╝██╔══██╗██╔══██╗██║`,
+		`██║  ██║██╔████╔██║ ╚███╔╝ ███████║██████╔╝██║`,
+		`██║  ██║██║╚██╔╝██║ ██╔██╗ ██╔══██║██╔═══╝ ██║`,
+		`██████╔╝██║ ╚═╝ ██║██╔╝ ██╗██║  ██║██║     ██║`,
+		`╚═════╝ ╚═╝     ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝     ╚═╝`,
+	}
+	colors := []string{
+		colorBrightCyan, colorBrightCyan,
+		colorCyan, colorCyan,
+		colorBlue, colorBlue,
+	}
+	fmt.Println()
+	for i, line := range logo {
+		fmt.Println("  " + colors[i] + styleBold + line + colorReset)
+	}
+	fmt.Println()
+	fmt.Println("  " + styleDim + colorBrightWhite +
+		"Claude Code CLI 配置工具  ·  让 AI 触手可及" + colorReset)
+	fmt.Printf("  %s%sv%s  %s%s/%s%s\n\n",
+		styleDim, colorWhite, appVersion, colorReset,
+		colorMagenta, runtime.GOOS+"/"+runtime.GOARCH, colorReset)
+}
+
+// printSectionHeader 打印章节标题
+func printSectionHeader(title string) {
+	fmt.Printf("\n%s┌─%s %s%s%s\n", colorBrightBlue, colorReset, styleBold, title, colorReset)
+}
+
+// printTip 打印提示信息
+func printTip(text string) {
+	fmt.Printf("  %s◆%s %s\n", colorBrightBlue, colorReset, text)
+}
+
+// printBox 打印双线边框盒子
+func printBox(title, titleColor string, lines []string) {
+	border := strings.Repeat("═", boxWidth)
+	fmt.Printf("╔%s╗\n", border)
+
+	// 标题居中
+	titleVisible := visibleLength(title)
+	padding := boxWidth - titleVisible
+	left := padding / 2
+	right := padding - left
+	fmt.Printf("║%s%s%s%s%s║\n",
+		strings.Repeat(" ", left), titleColor+styleBold, title, colorReset, strings.Repeat(" ", right))
+
+	fmt.Printf("╠%s╣\n", border)
+
+	for _, line := range lines {
+		lineVisible := visibleLength(line)
+		pad := boxWidth - lineVisible - 2 // 2 for leading spaces
+		if pad < 0 {
+			pad = 0
+		}
+		fmt.Printf("║  %s%s║\n", line, strings.Repeat(" ", pad))
+	}
+
+	fmt.Printf("╚%s╝\n", border)
+}
+
+// MenuItem 菜单项
+type MenuItem struct {
+	Key   string
+	Label string
+	Desc  string
+}
+
+// printMenu 打印圆角边框菜单
+func printMenu(title string, items []MenuItem) {
+	border := strings.Repeat("─", boxWidth)
+	fmt.Printf("╭%s╮\n", border)
+
+	// 标题居中
+	titleVisible := visibleLength(title)
+	padding := boxWidth - titleVisible
+	left := padding / 2
+	right := padding - left
+	fmt.Printf("│%s%s%s%s%s│\n",
+		strings.Repeat(" ", left), styleBold+colorBrightWhite, title, colorReset, strings.Repeat(" ", right))
+
+	fmt.Printf("├%s┤\n", border)
+
+	for _, item := range items {
+		// 格式: │  [1]  主标签  暗色副描述  │
+		content := fmt.Sprintf("%s[%s]%s  %s%s%s  %s%s%s",
+			colorBrightYellow, item.Key, colorReset,
+			styleBold+colorBrightWhite, item.Label, colorReset,
+			styleDim, item.Desc, colorReset)
+		contentVisible := 5 + visibleLength(item.Label) + 2 + visibleLength(item.Desc) // [X]+2sp+label+2sp+desc
+		pad := boxWidth - contentVisible - 2
+		if pad < 0 {
+			pad = 0
+		}
+		fmt.Printf("│  %s%s│\n", content, strings.Repeat(" ", pad))
+	}
+
+	fmt.Printf("╰%s╯\n", border)
+}
+
+// ==================== 样式输入函数 ====================
+
+// styledInput 带样式提示符的文本输入
+func styledInput(label string) string {
+	fmt.Printf("  %s❯%s %s%s:%s ", colorBrightCyan, colorReset, styleBold, label, colorReset)
+	reader := bufio.NewReader(os.Stdin)
+	input, _ := reader.ReadString('\n')
+	return strings.TrimSpace(input)
+}
+
+// styledPassword 带样式提示符的隐藏输入
+func styledPassword(label string) string {
+	fmt.Printf("  %s❯%s %s%s:%s ", colorBrightCyan, colorReset, styleBold, label, colorReset)
+	fd := int(syscall.Stdin)
+	if term.IsTerminal(fd) {
+		pw, err := term.ReadPassword(fd)
+		fmt.Println()
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(string(pw))
+	}
+	reader := bufio.NewReader(os.Stdin)
+	input, _ := reader.ReadString('\n')
+	return strings.TrimSpace(input)
+}
+
+// styledConfirm 带样式提示符的确认（y/N）
+func styledConfirm(label string) bool {
+	fmt.Printf("  %s?%s %s%s%s %s(y/N):%s ",
+		colorBrightYellow, colorReset, styleBold, label, colorReset, styleDim, colorReset)
+	reader := bufio.NewReader(os.Stdin)
+	input, _ := reader.ReadString('\n')
+	input = strings.ToLower(strings.TrimSpace(input))
+	return input == "y" || input == "yes"
 }
 
 // ==================== 输入处理 ====================
@@ -450,19 +644,18 @@ func loadExistingConfig() Config {
 
 // getNewBaseURL 获取新的 Base URL
 func getNewBaseURL(existing string) string {
-	fmt.Println()
-	printInfo("配置 API 服务器地址")
+	printSectionHeader("配置 API 服务器地址")
 	fmt.Println("  示例: https://www.dmxapi.cn")
 
 	if existing != "" {
 		fmt.Printf("  当前值: %s\n", existing)
-		if !confirm("是否修改 Base URL?") {
+		if !styledConfirm("是否修改 Base URL") {
 			return existing
 		}
 	}
 
 	for {
-		input := readInput("请输入 Base URL: ")
+		input := styledInput("Base URL")
 		if input == "" && existing != "" {
 			return existing
 		}
@@ -479,8 +672,7 @@ func getNewBaseURL(existing string) string {
 
 // getNewAuthToken 获取新的 Auth Token
 func getNewAuthToken(existing, hostname string) string {
-	fmt.Println()
-	printInfo("配置 API 认证令牌")
+	printSectionHeader("配置 API 认证令牌")
 
 	if hostname != "" {
 		fmt.Printf("  获取地址: https://%s/token\n", hostname)
@@ -488,13 +680,13 @@ func getNewAuthToken(existing, hostname string) string {
 
 	if existing != "" {
 		fmt.Println("  当前已配置 Token")
-		if !confirm("是否更新 Token?") {
+		if !styledConfirm("是否更新 Token") {
 			return existing
 		}
 	}
 
 	for {
-		input := readInput("请输入 Auth Token: ")
+		input := styledInput("Auth Token")
 		if input == "" {
 			if existing != "" {
 				return existing
@@ -510,13 +702,14 @@ func getNewAuthToken(existing, hostname string) string {
 // selectConfigMode 选择配置模式
 // 返回值: 1 = 完整配置, 2 = 仅配置模型
 func selectConfigMode() int {
-	fmt.Println("请选择配置模式:")
-	fmt.Println("  1. 完整配置 (配置 URL、Token 和模型)")
-	fmt.Println("  2. 仅配置模型 (跳过 URL 和 Token 配置)")
+	printMenu("配置模式选择", []MenuItem{
+		{"1", "完整配置", "配置 URL、Token 和模型"},
+		{"2", "仅配置模型", "跳过 URL 和 Token 配置"},
+	})
 	fmt.Println()
 
 	for {
-		input := readInput("请输入选项 (1/2): ")
+		input := styledInput("选项")
 		switch input {
 		case "1":
 			return 1
@@ -530,13 +723,15 @@ func selectConfigMode() int {
 
 // selectFixOption 让用户选择要修改的内容
 func selectFixOption() int {
-	fmt.Println("请选择要修改的内容:")
-	fmt.Println("  1. URL 有问题")
-	fmt.Println("  2. Key 有问题")
-	fmt.Println("  3. 都有问题")
+	printMenu("选择要修改的内容", []MenuItem{
+		{"1", "修改 URL", "Base URL 有问题"},
+		{"2", "修改 Key", "API Key 有问题"},
+		{"3", "都修改", "URL 和 Key 都有问题"},
+	})
+	fmt.Println()
 
 	for {
-		input := readInput("请输入选项 (1/2/3): ")
+		input := styledInput("选项")
 		switch input {
 		case "1":
 			return 1
@@ -553,7 +748,7 @@ func selectFixOption() int {
 // inputNewBaseURL 输入新的 Base URL（无需确认是否修改）
 func inputNewBaseURL() string {
 	for {
-		input := readInput("请输入新的 Base URL: ")
+		input := styledInput("新 Base URL")
 		if input == "" {
 			printError("URL 不能为空")
 			continue
@@ -573,7 +768,7 @@ func inputNewAuthToken(hostname string) string {
 		fmt.Printf("  获取地址: https://%s/token\n", hostname)
 	}
 	for {
-		input := readInput("请输入新的 Auth Token: ")
+		input := styledInput("新 Auth Token")
 		if input == "" {
 			printError("Token 不能为空")
 			continue
@@ -584,8 +779,7 @@ func inputNewAuthToken(hostname string) string {
 
 // configureModels 配置模型
 func configureModels(cfg *Config) {
-	fmt.Println()
-	printInfo("配置模型设置")
+	printSectionHeader("配置模型设置")
 
 	// 设置默认值
 	if cfg.Model == "" {
@@ -608,28 +802,28 @@ func configureModels(cfg *Config) {
 	fmt.Printf("  %-35s = %s\n", envSonnetModel, cfg.SonnetModel)
 	fmt.Printf("  %-35s = %s\n", envOpusModel, cfg.OpusModel)
 
-	if !confirm("\n是否修改模型配置?") {
+	if !styledConfirm("是否修改模型配置") {
 		return
 	}
 
 	// 逐个配置模型
 	fmt.Println()
-	input := readInput(fmt.Sprintf("默认模型 [%s]: ", cfg.Model))
+	input := styledInput("默认模型")
 	if input != "" {
 		cfg.Model = input
 	}
 
-	input = readInput(fmt.Sprintf("Haiku 模型 [%s]: ", cfg.HaikuModel))
+	input = styledInput("Haiku 模型")
 	if input != "" {
 		cfg.HaikuModel = input
 	}
 
-	input = readInput(fmt.Sprintf("Sonnet 模型 [%s]: ", cfg.SonnetModel))
+	input = styledInput("Sonnet 模型")
 	if input != "" {
 		cfg.SonnetModel = input
 	}
 
-	input = readInput(fmt.Sprintf("Opus 模型 [%s]: ", cfg.OpusModel))
+	input = styledInput("Opus 模型")
 	if input != "" {
 		cfg.OpusModel = input
 	}
@@ -666,29 +860,43 @@ func saveConfig(cfg Config) error {
 // printSummary 打印配置摘要
 func printSummary(cfg Config) {
 	fmt.Println()
-	fmt.Println(strings.Repeat("=", 50))
-	printSuccess("配置完成!")
-	fmt.Println(strings.Repeat("=", 50))
-	fmt.Println()
-	fmt.Printf("  %-40s = %s\n", envBaseURL, cfg.BaseURL)
-	fmt.Printf("  %-40s = %s\n", envAuthToken, maskToken(cfg.AuthToken))
-	fmt.Printf("  %-40s = %s\n", envModel, cfg.Model)
-	fmt.Printf("  %-40s = %s\n", envHaikuModel, cfg.HaikuModel)
-	fmt.Printf("  %-40s = %s\n", envSonnetModel, cfg.SonnetModel)
-	fmt.Printf("  %-40s = %s\n", envOpusModel, cfg.OpusModel)
-	fmt.Printf("  %-40s = %s\n", envDisableExperimentalBetas, fixedDisableExperimentalBetas)
+	printSuccess("配置完成！")
 	fmt.Println()
 
+	// 构建表格行，标签列固定 14 字符
+	makeRow := func(label, value, valueColor string) string {
+		pad := 14 - visibleLength(label)
+		if pad < 0 {
+			pad = 0
+		}
+		return fmt.Sprintf("%s%s%s%s│ %s%s%s",
+			styleBold+colorBrightWhite, label, colorReset,
+			strings.Repeat(" ", pad),
+			valueColor, value, colorReset)
+	}
+
+	lines := []string{
+		makeRow("Base URL", cfg.BaseURL, colorBrightGreen),
+		makeRow("Auth Token", maskToken(cfg.AuthToken), colorBrightYellow),
+		makeRow("Model", cfg.Model, colorCyan),
+		makeRow("Haiku Model", cfg.HaikuModel, colorCyan),
+		makeRow("Sonnet Model", cfg.SonnetModel, colorCyan),
+		makeRow("Opus Model", cfg.OpusModel, colorCyan),
+		makeRow("Disable Betas", fixedDisableExperimentalBetas, colorMagenta),
+	}
+	printBox("配置摘要", colorBrightWhite, lines)
+
+	fmt.Println()
 	switch runtime.GOOS {
 	case "windows":
-		printInfo("配置已保存到用户环境变量")
-		printInfo("请重新打开终端窗口使配置生效")
+		printTip("配置已保存到用户环境变量")
+		printTip("请重新打开终端窗口使配置生效")
 	case "darwin":
-		printInfo("配置已保存到 shell 配置文件")
-		printInfo("请运行 'source ~/.zshrc' 或重新打开终端使配置生效")
+		printTip("配置已写入 ~/.zshrc 和 ~/.bash_profile")
+		printTip("执行 source ~/.zshrc 或重启终端使配置生效")
 	default:
-		printInfo("配置已保存到 shell 配置文件")
-		printInfo("请运行 'source ~/.bashrc' 或重新打开终端使配置生效")
+		printTip("配置已写入 ~/.bashrc 和 ~/.profile")
+		printTip("执行 source ~/.bashrc 或重启终端使配置生效")
 	}
 }
 
@@ -703,15 +911,8 @@ func maskToken(token string) string {
 // ==================== 主程序 ====================
 
 func main() {
-	// 显示欢迎信息
-	fmt.Println()
-	fmt.Println(strings.Repeat("=", 50))
-	printColor(colorCyan, fmt.Sprintf("  %s 配置工具\n", appName))
-	fmt.Println(strings.Repeat("=", 50))
-
-	// 检测系统信息
-	fmt.Printf("  系统: %s/%s\n", runtime.GOOS, runtime.GOARCH)
-	fmt.Println()
+	// 显示 Logo
+	printLogo()
 
 	// 选择配置模式
 	configMode := selectConfigMode()
@@ -796,6 +997,5 @@ func main() {
 
 	// 等待用户退出
 	fmt.Println()
-	printInfo("按回车键退出...")
-	bufio.NewReader(os.Stdin).ReadBytes('\n')
+	styledInput("按回车键退出")
 }
