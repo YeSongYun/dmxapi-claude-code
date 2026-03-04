@@ -824,6 +824,9 @@ func enterRawMode() (restoreFn func(), err error) {
 
 // readRawKey 在已进入 raw 模式的终端中读取一个按键
 func readRawKey() KeyType {
+	if runtime.GOOS == "windows" {
+		return readConsoleKey()
+	}
 	buf := make([]byte, 1)
 	os.Stdin.Read(buf)
 	switch buf[0] {
