@@ -833,27 +833,44 @@ func readRawKey() KeyType {
 		return KeyEsc
 	case 0x03: // Ctrl+C
 		os.Exit(0)
-	case 0x1B: // ESC 序列
-		buf2 := make([]byte, 1)
-		n, _ := os.Stdin.Read(buf2)
+	case 0x1B: // ESC 序列（Linux/macOS/Windows Terminal）
+		rest := make([]byte, 2)
+		n, _ := os.Stdin.Read(rest)
 		if n == 0 {
 			return KeyOther
 		}
-		if buf2[0] == '[' {
-			buf3 := make([]byte, 1)
-			n2, _ := os.Stdin.Read(buf3)
-			if n2 == 0 {
-				return KeyOther
-			}
-			switch buf3[0] {
+		if n >= 2 && rest[0] == '[' {
+			switch rest[1] {
 			case 'A':
 				return KeyUp
 			case 'B':
 				return KeyDown
 			}
+		} else if n == 1 && rest[0] == '[' {
+			// 降级：仅读到 '[' 时，再读一字节
+			buf3 := make([]byte, 1)
+			if n2, _ := os.Stdin.Read(buf3); n2 > 0 {
+				switch buf3[0] {
+				case 'A':
+					return KeyUp
+				case 'B':
+					return KeyDown
+				}
+			}
 		}
 		return KeyOther
 	case 0xE0: // Windows 扩展键
+		if runtime.GOOS == "windows" {
+			buf2 := make([]byte, 1)
+			os.Stdin.Read(buf2)
+			switch buf2[0] {
+			case 0x48:
+				return KeyUp
+			case 0x50:
+				return KeyDown
+			}
+		}
+	case 0x00: // Windows 数字键盘方向键前缀（Num Lock 关闭时）
 		if runtime.GOOS == "windows" {
 			buf2 := make([]byte, 1)
 			os.Stdin.Read(buf2)
@@ -1355,6 +1372,7 @@ func maskToken(token string) string {
 // ==================== 主程序 ====================
 
 func main() {
+	initWindowsConsole()
 	// 显示 Logo
 	printLogo()
 
