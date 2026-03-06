@@ -57,6 +57,8 @@ var presetModels = []string{
 	"qwen3.5-plus-cc",
 	"DeepSeek-V3.2-cc",
 	"hunyuan-2.0-instruct-20251111-cc",
+	"claude-opus-4-6-cc",
+	"claude-sonnet-4-6-cc",
 	"claude-opus-4-6",
 	"claude-sonnet-4-6",
 }
@@ -1165,13 +1167,13 @@ func runL2Menu(typeName, currentValue string) string {
 		key := readRawKey()
 		switch key {
 		case KeyUp:
-			idx = (idx - 1 + 12) % 12
+			idx = (idx - 1 + 14) % 14
 		case KeyDown:
-			idx = (idx + 1) % 12
+			idx = (idx + 1) % 14
 		case KeyEnter:
 			restore()
 			clearMenuLines(linesPrinted)
-			if idx == 11 {
+			if idx == 13 {
 				// 自定义输入
 				val := styledInput(typeName + " (自定义)")
 				if val == "" {
