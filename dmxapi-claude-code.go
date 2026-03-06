@@ -1077,7 +1077,7 @@ func renderL1Menu(entries []modelTypeEntry, selectedIdx int, linesPrinted int) i
 	return 10
 }
 
-// renderL2Menu 渲染二级菜单，返回渲染行数（固定17行）
+// renderL2Menu 渲染二级菜单，返回渲染行数（len(presetModels)+7）
 func renderL2Menu(typeName string, currentValue string, selectedIdx int, linesPrinted int) int {
 	if linesPrinted > 0 {
 		fmt.Printf("\033[%dA", linesPrinted)
@@ -1123,10 +1123,10 @@ func renderL2Menu(typeName string, currentValue string, selectedIdx int, linesPr
 		}
 	}
 
-	// 自定义选项（索引10）
+	// 自定义选项（索引 len(presetModels)）
 	customText := "✏ 自定义输入..."
 	customPad := 60 - 3 - visibleLength(customText) // = 42
-	if selectedIdx == 10 {
+	if selectedIdx == len(presetModels) {
 		fmt.Printf("│ %s❯%s %s%s%s%s│\033[K\r\n",
 			colorBrightCyan+styleBold, colorReset,
 			colorBrightYellow, customText, colorReset,
@@ -1141,7 +1141,7 @@ func renderL2Menu(typeName string, currentValue string, selectedIdx int, linesPr
 	fmt.Printf("\033[K\r\n")
 	fmt.Printf("  %s↑↓ 导航%s  %sEnter 确认%s  %sq 返回%s\033[K\r\n",
 		styleDim, colorReset, styleDim, colorReset, styleDim, colorReset)
-	return 17
+	return len(presetModels) + 7
 }
 
 // runL2Menu 运行二级菜单，返回选中的模型名
