@@ -57,8 +57,8 @@ var presetModels = []string{
 	"qwen3.5-plus-cc",
 	"DeepSeek-V3.2-cc",
 	"hunyuan-2.0-instruct-20251111-cc",
-	"claude-opus-4-6-cc",
-	"claude-sonnet-4-6-cc",
+	"claude-opus-4-6",
+	"claude-sonnet-4-6",
 }
 
 // 颜色代码
