@@ -57,6 +57,7 @@ var presetModels = []string{
 	"mimo-v2-flash-cc",
 	"hunyuan-2.0-thinking-20251109-cc",
 	"qwen3.5-plus-cc",
+	"qwen3.5-flash-cc",
 	"DeepSeek-V3.2-cc",
 	"hunyuan-2.0-instruct-20251111-cc",
 	"claude-opus-4-6",
@@ -1168,13 +1169,13 @@ func runL2Menu(typeName, currentValue string) string {
 		key := readRawKey()
 		switch key {
 		case KeyUp:
-			idx = (idx - 1 + 15) % 15
+			idx = (idx - 1 + len(presetModels)+1) % (len(presetModels) + 1)
 		case KeyDown:
-			idx = (idx + 1) % 15
+			idx = (idx + 1) % (len(presetModels) + 1)
 		case KeyEnter:
 			restore()
 			clearMenuLines(linesPrinted)
-			if idx == 14 {
+			if idx == len(presetModels) {
 				// 自定义输入
 				val := styledInput(typeName + " (自定义)")
 				if val == "" {
