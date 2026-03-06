@@ -842,10 +842,13 @@ func readRawKey() KeyType {
 	case 0x03: // Ctrl+C
 		os.Exit(0)
 	case 0x1B: // ESC 序列（Linux/macOS/Windows Terminal）
+		if !stdinDataReady(100) {
+			return KeyEsc // 单独按下 ESC 键，无后续字节
+		}
 		rest := make([]byte, 2)
 		n, _ := os.Stdin.Read(rest)
 		if n == 0 {
-			return KeyOther
+			return KeyEsc
 		}
 		if n >= 2 && rest[0] == '[' {
 			switch rest[1] {
@@ -1073,7 +1076,7 @@ func renderL1Menu(entries []modelTypeEntry, selectedIdx int, linesPrinted int) i
 
 	fmt.Printf("╰%s╯\033[K\r\n", border)
 	fmt.Printf("\033[K\r\n")
-	fmt.Printf("  %s↑↓ 导航%s  %sEnter 配置%s  %sq 保存退出%s\033[K\r\n",
+	fmt.Printf("  %s↑↓ 导航%s  %sEnter 配置%s  %sq/Esc 保存退出%s\033[K\r\n",
 		styleDim, colorReset, styleDim, colorReset, styleDim, colorReset)
 	return 10
 }
@@ -1140,7 +1143,7 @@ func renderL2Menu(typeName string, currentValue string, selectedIdx int, linesPr
 
 	fmt.Printf("╰%s╯\033[K\r\n", border)
 	fmt.Printf("\033[K\r\n")
-	fmt.Printf("  %s↑↓ 导航%s  %sEnter 确认%s  %sq 返回%s\033[K\r\n",
+	fmt.Printf("  %s↑↓ 导航%s  %sEnter 确认%s  %sq/Esc 返回%s\033[K\r\n",
 		styleDim, colorReset, styleDim, colorReset, styleDim, colorReset)
 	return len(presetModels) + 7
 }

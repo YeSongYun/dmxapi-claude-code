@@ -83,6 +83,11 @@ func readConsoleKey() KeyType {
 	}
 }
 
+// stdinDataReady 在 Windows 上是编译占位，Windows 使用 readConsoleKey 处理键盘输入
+func stdinDataReady(timeoutMs int) bool {
+	return true
+}
+
 // initWindowsConsole 初始化 Windows 控制台：设置 UTF-8 代码页并启用 ANSI/VT 颜色处理
 func initWindowsConsole() {
 	kernel32 := syscall.NewLazyDLL("kernel32.dll")
