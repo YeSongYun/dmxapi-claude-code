@@ -48,16 +48,17 @@ const (
 )
 
 var presetModels = []string{
-	"claude-opus-4-6-cc",
-	"claude-sonnet-4-6-cc",
 	"claude-haiku-4-5-20251001-cc",
 	"MiniMax-M2.5-cc",
 	"glm-5-cc",
 	"kimi-k2.5-cc",
+	"mimo-v2-flash-cc",
 	"hunyuan-2.0-thinking-20251109-cc",
 	"qwen3.5-plus-cc",
-	"hunyuan-2.0-instruct-20251111-cc",
 	"DeepSeek-V3.2-cc",
+	"hunyuan-2.0-instruct-20251111-cc",
+	"claude-opus-4-6-cc",
+	"claude-sonnet-4-6-cc",
 }
 
 // 颜色代码
@@ -1164,13 +1165,13 @@ func runL2Menu(typeName, currentValue string) string {
 		key := readRawKey()
 		switch key {
 		case KeyUp:
-			idx = (idx - 1 + 11) % 11
+			idx = (idx - 1 + 12) % 12
 		case KeyDown:
-			idx = (idx + 1) % 11
+			idx = (idx + 1) % 12
 		case KeyEnter:
 			restore()
 			clearMenuLines(linesPrinted)
-			if idx == 10 {
+			if idx == 11 {
 				// 自定义输入
 				val := styledInput(typeName + " (自定义)")
 				if val == "" {
