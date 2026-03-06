@@ -4,7 +4,8 @@ package main
 
 import (
 	"syscall"
-	"unsafe"
+
+	"golang.org/x/sys/unix"
 )
 
 // initWindowsConsole 在非 Windows 平台上是空操作
@@ -15,17 +16,10 @@ func readConsoleKey() KeyType {
 	return KeyOther
 }
 
-// pollFd 对应 struct pollfd（poll(2) 使用）
-type pollFd struct {
-	Fd      int32
-	Events  int16
-	Revents int16
-}
-
 // stdinDataReady 使用 poll(2) 检查 stdin 在指定超时内是否有数据可读。
 // 用于区分单独按下 ESC 和以 ESC 开头的方向键序列。
 func stdinDataReady(timeoutMs int) bool {
-	fds := [1]pollFd{{Fd: 0, Events: 1}} // POLLIN = 1
-	r, _, errno := syscall.Syscall(syscall.SYS_POLL, uintptr(unsafe.Pointer(&fds[0])), 1, uintptr(timeoutMs))
-	return errno == 0 && r > 0
+	fds := []unix.PollFd{{Fd: int32(syscall.Stdin), Events: unix.POLLIN}}
+	n, err := unix.Poll(fds, timeoutMs)
+	return err == nil && n > 0
 }

@@ -3,9 +3,12 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"syscall"
 	"unsafe"
+
+	"golang.org/x/term"
 )
 
 // keyEvent 是 INPUT_RECORD.EventType 的键盘事件标识
@@ -32,21 +35,28 @@ type inputRecord struct {
 	DwControlKeyState uint32  // offset 16, 4 bytes
 } // total: 20 bytes ✓
 
+// kernel32 及其导出函数，整个包共用一次加载
+var (
+	kernel32         = syscall.NewLazyDLL("kernel32.dll")
+	procGetStdHandle = kernel32.NewProc("GetStdHandle")
+	procReadConsole  = kernel32.NewProc("ReadConsoleInputW")
+	procSetConsoleCP = kernel32.NewProc("SetConsoleCP")
+	procSetOutputCP  = kernel32.NewProc("SetConsoleOutputCP")
+	procGetConsMode  = kernel32.NewProc("GetConsoleMode")
+	procSetConsMode  = kernel32.NewProc("SetConsoleMode")
+)
+
 // readConsoleKey 使用 ReadConsoleInputW 直接读取原始键盘事件，
 // 不依赖控制台模式标志，兼容 CMD、PowerShell、Windows Terminal
 func readConsoleKey() KeyType {
-	kernel32 := syscall.NewLazyDLL("kernel32.dll")
-	getStdHandle := kernel32.NewProc("GetStdHandle")
-	readConsoleInput := kernel32.NewProc("ReadConsoleInputW")
-
 	// STD_INPUT_HANDLE = (DWORD)(-10) = ^uint32(9)
 	const stdInputHandle = uintptr(^uint32(9))
-	hIn, _, _ := getStdHandle.Call(stdInputHandle)
+	hIn, _, _ := procGetStdHandle.Call(stdInputHandle)
 
 	for {
 		var rec inputRecord
 		var n uint32
-		ret, _, _ := readConsoleInput.Call(
+		ret, _, _ := procReadConsole.Call(
 			hIn,
 			uintptr(unsafe.Pointer(&rec)),
 			1,
@@ -63,6 +73,10 @@ func readConsoleKey() KeyType {
 		}
 		// Ctrl+C: UnicodeChar == 3
 		if rec.UnicodeChar == 3 {
+			if rawModeState != nil {
+				term.Restore(int(syscall.Stdin), rawModeState)
+				fmt.Println()
+			}
 			os.Exit(0)
 		}
 		switch rec.WVirtualKeyCode {
@@ -90,24 +104,18 @@ func stdinDataReady(timeoutMs int) bool {
 
 // initWindowsConsole 初始化 Windows 控制台：设置 UTF-8 代码页并启用 ANSI/VT 颜色处理
 func initWindowsConsole() {
-	kernel32 := syscall.NewLazyDLL("kernel32.dll")
-
 	// 1. 设置输入/输出代码页为 UTF-8 (65001)，解决中文乱码
-	kernel32.NewProc("SetConsoleCP").Call(65001)
-	kernel32.NewProc("SetConsoleOutputCP").Call(65001)
+	procSetConsoleCP.Call(65001)
+	procSetOutputCP.Call(65001)
 
 	// 2. 启用 stdout 的 ANSI/VT 处理（ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004）
 	//    让颜色转义码（\033[31m 等）和框线字符正常渲染
-	getStdHandle := kernel32.NewProc("GetStdHandle")
-	getConsoleMode := kernel32.NewProc("GetConsoleMode")
-	setConsoleMode := kernel32.NewProc("SetConsoleMode")
-
 	// STD_OUTPUT_HANDLE = (DWORD)(-11) = 0xFFFFFFF5
 	// 注意：必须用 uintptr(^uint32(10)) 而非 ^uintptr(10)
 	// 后者在 64 位系统为 0xFFFFFFFFFFFFFFF5，与 Windows DWORD 不符
 	const stdOutputHandle = uintptr(^uint32(10))
-	h, _, _ := getStdHandle.Call(stdOutputHandle)
+	h, _, _ := procGetStdHandle.Call(stdOutputHandle)
 	var mode uint32
-	getConsoleMode.Call(h, uintptr(unsafe.Pointer(&mode)))
-	setConsoleMode.Call(h, uintptr(mode|0x0004))
+	procGetConsMode.Call(h, uintptr(unsafe.Pointer(&mode)))
+	procSetConsMode.Call(h, uintptr(mode|0x0004))
 }

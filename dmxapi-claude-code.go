@@ -92,6 +92,9 @@ const (
 	boxWidth = 60
 )
 
+// rawModeState 保存终端 raw 模式前的状态，用于 Ctrl+C 时恢复
+var rawModeState *term.State
+
 // Config 存储所有配置项
 type Config struct {
 	BaseURL     string
@@ -106,12 +109,7 @@ type Config struct {
 
 // printColor 打印带颜色的文本
 func printColor(color, text string) {
-	if runtime.GOOS == "windows" {
-		// Windows 下尝试启用 ANSI 颜色支持
-		fmt.Print(color + text + colorReset)
-	} else {
-		fmt.Print(color + text + colorReset)
-	}
+	fmt.Print(color + text + colorReset)
 }
 
 // printSuccess 打印成功信息
@@ -137,7 +135,7 @@ func printInfo(text string) {
 // runWithSpinner 带旋转动画执行任务
 func runWithSpinner(message string, task func() error) error {
 	spinner := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
-	done := make(chan bool)
+	done := make(chan bool, 1) // 带缓冲，防止 task panic 时 goroutine 阻塞
 	var err error
 
 	go func() {
@@ -157,11 +155,32 @@ func runWithSpinner(message string, task func() error) error {
 	err = task()
 	done <- true
 
-	fmt.Print("\r" + strings.Repeat(" ", 70) + "\r")
+	clearLen := visibleLength(message) + 6
+	fmt.Print("\r" + strings.Repeat(" ", clearLen) + "\r")
 	return err
 }
 
 // ==================== 终端 UI 组件 ====================
+
+// runeWidth 返回单个 rune 在终端中的显示宽度（1 或 2）
+func runeWidth(r rune) int {
+	// 东亚双宽字符完整范围
+	if (r >= 0x2E80 && r <= 0x2FFF) || // CJK Radicals / 康熙部首
+		(r >= 0x3000 && r <= 0x303F) || // CJK 符号和标点
+		(r >= 0x3040 && r <= 0x30FF) || // 日文平假名 + 片假名
+		(r >= 0x3100 && r <= 0x312F) || // 注音符号
+		(r >= 0x3400 && r <= 0x4DBF) || // CJK 统一汉字扩展 A
+		(r >= 0x4E00 && r <= 0x9FFF) || // CJK 统一汉字
+		(r >= 0xAC00 && r <= 0xD7AF) || // 韩文音节
+		(r >= 0xF900 && r <= 0xFAFF) || // CJK 兼容汉字
+		(r >= 0xFE30 && r <= 0xFE4F) || // CJK 兼容形式
+		(r >= 0xFF01 && r <= 0xFF60) || // 全宽 ASCII + 全宽标点
+		(r >= 0xFFE0 && r <= 0xFFE6) || // 全宽货币符号等
+		(r >= 0x20000 && r <= 0x2FA1F) { // CJK 扩展 B~F + 兼容补充
+		return 2
+	}
+	return 1
+}
 
 // visibleLength 计算字符串在终端中的可见宽度（ANSI 感知 + CJK 双宽度）
 func visibleLength(s string) int {
@@ -178,15 +197,7 @@ func visibleLength(s string) int {
 			}
 			continue
 		}
-		// CJK 统一汉字区间，占 2 格
-		if (r >= 0x4E00 && r <= 0x9FFF) ||
-			(r >= 0x3400 && r <= 0x4DBF) ||
-			(r >= 0xFF00 && r <= 0xFFEF) ||
-			(r >= 0x3000 && r <= 0x303F) {
-			count += 2
-		} else {
-			count++
-		}
+		count += runeWidth(r)
 	}
 	return count
 }
@@ -508,7 +519,7 @@ func setEnvVarsUnix(vars map[string]string) error {
 		if runtime.GOOS == "darwin" && configFile == ".zshrc" {
 			if _, err := os.Stat(configPath); os.IsNotExist(err) {
 				// 创建空的 .zshrc 文件
-				if err := os.WriteFile(configPath, []byte(""), 0644); err != nil {
+				if err := os.WriteFile(configPath, []byte(""), 0600); err != nil {
 					return fmt.Errorf("创建 %s 失败: %v", configPath, err)
 				}
 			}
@@ -524,7 +535,10 @@ func setEnvVarsUnix(vars map[string]string) error {
 			continue
 		}
 
-		lines := strings.Split(string(content), "\n")
+		// 统一行尾符：\r\n → \n，\r → \n（兼容 Windows 编辑过的文件）
+		normalized := strings.ReplaceAll(string(content), "\r\n", "\n")
+		normalized = strings.ReplaceAll(normalized, "\r", "\n")
+		lines := strings.Split(normalized, "\n")
 		newLines := make([]string, 0, len(lines))
 		foundKeys := make(map[string]bool)
 
@@ -822,8 +836,10 @@ func enterRawMode() (restoreFn func(), err error) {
 	if err != nil {
 		return nil, err
 	}
+	rawModeState = oldState
 	return func() {
 		term.Restore(fd, oldState)
+		rawModeState = nil
 	}, nil
 }
 
@@ -840,6 +856,10 @@ func readRawKey() KeyType {
 	case 'q', 'Q':
 		return KeyEsc
 	case 0x03: // Ctrl+C
+		if rawModeState != nil {
+			term.Restore(int(syscall.Stdin), rawModeState)
+			fmt.Println()
+		}
 		os.Exit(0)
 	case 0x1B: // ESC 序列（Linux/macOS/Windows Terminal）
 		if !stdinDataReady(100) {
@@ -870,38 +890,26 @@ func readRawKey() KeyType {
 			}
 		}
 		return KeyOther
-	case 0xE0: // Windows 扩展键
-		if runtime.GOOS == "windows" {
-			buf2 := make([]byte, 1)
-			os.Stdin.Read(buf2)
-			switch buf2[0] {
-			case 0x48:
-				return KeyUp
-			case 0x50:
-				return KeyDown
-			}
-		}
-	case 0x00: // Windows 数字键盘方向键前缀（Num Lock 关闭时）
-		if runtime.GOOS == "windows" {
-			buf2 := make([]byte, 1)
-			os.Stdin.Read(buf2)
-			switch buf2[0] {
-			case 0x48:
-				return KeyUp
-			case 0x50:
-				return KeyDown
-			}
-		}
 	}
 	return KeyOther
 }
 
-// truncateStr 截断字符串，超过 maxLen 时末尾加省略号
+// truncateStr 截断字符串，超过 maxLen 显示宽度时末尾加 "..."
 func truncateStr(s string, maxLen int) string {
-	if len(s) <= maxLen {
+	if visibleLength(s) <= maxLen {
 		return s
 	}
-	return s[:maxLen-1] + "…"
+	width := 0
+	var result []rune
+	for _, r := range s {
+		rw := runeWidth(r)
+		if width+rw+3 > maxLen { // 预留 3 字符给 "..."
+			break
+		}
+		result = append(result, r)
+		width += rw
+	}
+	return string(result) + "..."
 }
 
 // findPresetIndex 在 presetModels 中查找，找不到返回 -1
@@ -1033,12 +1041,12 @@ func renderL1Menu(entries []modelTypeEntry, selectedIdx int, linesPrinted int) i
 	if linesPrinted > 0 {
 		fmt.Printf("\033[%dA", linesPrinted)
 	}
-	border := strings.Repeat("─", 60)
+	border := strings.Repeat("─", boxWidth)
 	fmt.Printf("╭%s╮\033[K\r\n", border)
 	title := "选择要配置的模型"
 	titleW := visibleLength(title)
-	lPad := (60 - titleW) / 2
-	rPad := 60 - titleW - lPad
+	lPad := (boxWidth - titleW) / 2
+	rPad := boxWidth - titleW - lPad
 	fmt.Printf("│%s%s%s%s%s│\033[K\r\n",
 		strings.Repeat(" ", lPad), styleBold+colorBrightWhite, title, colorReset, strings.Repeat(" ", rPad))
 	fmt.Printf("├%s┤\033[K\r\n", border)
@@ -1055,7 +1063,7 @@ func renderL1Menu(entries []modelTypeEntry, selectedIdx int, linesPrinted int) i
 		label := entry.Label
 		labelFill := strings.Repeat(" ", maxLabelW-visibleLength(label))
 		val := truncateStr(*entry.ValuePtr, 35)
-		pad := 55 - maxLabelW - visibleLength(val)
+		pad := boxWidth - 5 - maxLabelW - visibleLength(val)
 		if pad < 0 {
 			pad = 0
 		}
@@ -1078,7 +1086,7 @@ func renderL1Menu(entries []modelTypeEntry, selectedIdx int, linesPrinted int) i
 	fmt.Printf("\033[K\r\n")
 	fmt.Printf("  %s↑↓ 导航%s  %sEnter 配置%s  %sq/Esc 保存退出%s\033[K\r\n",
 		styleDim, colorReset, styleDim, colorReset, styleDim, colorReset)
-	return 10
+	return len(entries) + 6
 }
 
 // renderL2Menu 渲染二级菜单，返回渲染行数（len(presetModels)+7）
@@ -1086,12 +1094,12 @@ func renderL2Menu(typeName string, currentValue string, selectedIdx int, linesPr
 	if linesPrinted > 0 {
 		fmt.Printf("\033[%dA", linesPrinted)
 	}
-	border := strings.Repeat("─", 60)
+	border := strings.Repeat("─", boxWidth)
 	fmt.Printf("╭%s╮\033[K\r\n", border)
 	title := fmt.Sprintf("选择 %s", typeName)
 	titleW := visibleLength(title)
-	lPad := (60 - titleW) / 2
-	rPad := 60 - titleW - lPad
+	lPad := (boxWidth - titleW) / 2
+	rPad := boxWidth - titleW - lPad
 	fmt.Printf("│%s%s%s%s%s│\033[K\r\n",
 		strings.Repeat(" ", lPad), styleBold+colorBrightWhite, title, colorReset, strings.Repeat(" ", rPad))
 	fmt.Printf("├%s┤\033[K\r\n", border)
@@ -1099,7 +1107,7 @@ func renderL2Menu(typeName string, currentValue string, selectedIdx int, linesPr
 	for i, m := range presetModels {
 		isCurrent := (m == currentValue)
 		isSelected := (i == selectedIdx)
-		name := truncateStr(m, 54)
+		name := truncateStr(m, boxWidth-6)
 		nameW := visibleLength(name)
 		var check string
 		checkW := 2
@@ -1109,7 +1117,7 @@ func renderL2Menu(typeName string, currentValue string, selectedIdx int, linesPr
 		} else {
 			check = "  "
 		}
-		pad := 56 - nameW - checkW
+		pad := boxWidth - 4 - nameW - checkW
 		if pad < 0 {
 			pad = 0
 		}
@@ -1129,7 +1137,7 @@ func renderL2Menu(typeName string, currentValue string, selectedIdx int, linesPr
 
 	// 自定义选项（索引 len(presetModels)）
 	customText := "✏ 自定义输入..."
-	customPad := 60 - 3 - visibleLength(customText) // = 42
+	customPad := boxWidth - 3 - visibleLength(customText)
 	if selectedIdx == len(presetModels) {
 		fmt.Printf("│ %s❯%s %s%s%s%s│\033[K\r\n",
 			colorBrightCyan+styleBold, colorReset,
@@ -1374,10 +1382,11 @@ func printSummary(cfg Config) {
 
 // maskToken 遮盖 Token
 func maskToken(token string) string {
-	if len(token) <= 8 {
+	runes := []rune(token)
+	if len(runes) <= 8 {
 		return "********"
 	}
-	return token[:4] + "..." + token[len(token)-4:]
+	return string(runes[:4]) + "..." + string(runes[len(runes)-4:])
 }
 
 // ==================== 主程序 ====================
