@@ -48,6 +48,8 @@ const (
 )
 
 var presetModels = []string{
+	"claude-opus-4-6-cc",
+	"claude-sonnet-4-6-cc",
 	"claude-haiku-4-5-20251001-cc",
 	"MiniMax-M2.5-cc",
 	"glm-5-cc",
@@ -57,8 +59,6 @@ var presetModels = []string{
 	"qwen3.5-plus-cc",
 	"DeepSeek-V3.2-cc",
 	"hunyuan-2.0-instruct-20251111-cc",
-	"claude-opus-4-6-cc",
-	"claude-sonnet-4-6-cc",
 	"claude-opus-4-6",
 	"claude-sonnet-4-6",
 }
