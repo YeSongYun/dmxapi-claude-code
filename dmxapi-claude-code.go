@@ -188,15 +188,29 @@ func runeWidth(r rune) int {
 // visibleLength 计算字符串在终端中的可见宽度（ANSI 感知 + CJK 双宽度）
 func visibleLength(s string) int {
 	inEscape := false
+	csiStarted := false // 已消耗 ESC，等待 '[' 来确认 CSI 序列
 	count := 0
 	for _, r := range s {
 		if r == '\033' {
 			inEscape = true
+			csiStarted = false
 			continue
 		}
 		if inEscape {
-			if r == 'm' {
+			if !csiStarted {
+				// 等待 '[' 以确认 CSI 序列
+				if r == '[' {
+					csiStarted = true
+				} else {
+					// 非 CSI 序列（如 ESC c），直接结束转义
+					inEscape = false
+				}
+				continue
+			}
+			// 在 CSI 序列中：终止字节范围 0x40–0x7E（任意 CSI 终止字节）
+			if r >= 0x40 && r <= 0x7E {
 				inEscape = false
+				csiStarted = false
 			}
 			continue
 		}

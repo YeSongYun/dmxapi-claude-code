@@ -26,3 +26,24 @@ func TestCompareVersions(t *testing.T) {
 		}
 	}
 }
+
+func TestVisibleLength(t *testing.T) {
+	cases := []struct {
+		input string
+		want  int
+	}{
+		{"hello", 5},                        // 普通 ASCII
+		{"\033[31mhello\033[0m", 5},          // SGR 颜色序列（原来就支持）
+		{"\033[2Khello", 5},                  // 清行序列 \033[2K（修复前会多算1）
+		{"\033[1;32mOK\033[0m", 2},           // 多参数 SGR
+		{"你好", 4},                          // CJK 双宽字符
+		{"\033[Ahello\033[B", 5},             // 光标移动序列（\033[A 上移，\033[B 下移）
+		{"", 0},                              // 空字符串
+	}
+	for _, c := range cases {
+		got := visibleLength(c.input)
+		if got != c.want {
+			t.Errorf("visibleLength(%q) = %d, want %d", c.input, got, c.want)
+		}
+	}
+}
