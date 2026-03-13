@@ -498,7 +498,7 @@ func setEnvVarsWindows(vars map[string]string) error {
 				// setx 有 1024 字节上限，超长值改用 REG ADD 直接写注册表
 				err = runCommand("REG", "ADD", `HKCU\Environment`, "/V", k, "/T", "REG_SZ", "/D", v, "/F")
 				if err != nil {
-					errChan <- fmt.Errorf("设置 %s 失败（token 过长，注册表写入错误）：%v\n请重启终端后重试，或以管理员权限运行", k, err)
+					errChan <- fmt.Errorf("设置环境变量 %s 失败（token 过长，注册表写入错误）：%v - 请重启终端后重试，或以管理员权限运行", k, err)
 					return
 				}
 			} else {
