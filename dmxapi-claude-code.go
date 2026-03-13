@@ -1861,8 +1861,8 @@ func fetchLatestVersion() string {
 	if resp.StatusCode != 200 {
 		return ""
 	}
-	// 读取前 64KB，足以覆盖 initialState 中的第一个 tagRef
-	lr := io.LimitReader(resp.Body, 65536)
+	// 读取前 256KB，tagRef 数据位于约 142KB 处，需留足余量
+	lr := io.LimitReader(resp.Body, 262144)
 	data, err := io.ReadAll(lr)
 	if err != nil {
 		return ""
