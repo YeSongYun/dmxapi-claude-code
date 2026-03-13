@@ -481,6 +481,53 @@ func getEnvVar(key string) string {
 	return os.Getenv(key)
 }
 
+// shellProfile 描述用户当前 Shell 对应的配置文件信息
+type shellProfile struct {
+	configFiles []string // 相对于 HomeDir 的配置文件路径列表
+	sourceCmd   string   // 提示用户执行的 source 命令（空串=回退模式）
+	isFish      bool     // 是否为 fish shell（写法与 bash/zsh 不同）
+}
+
+// detectShellProfile 通过 $SHELL 环境变量检测用户的 shell，
+// 返回对应的配置文件列表和 source 命令。
+// goos 参数用于区分 darwin/linux 行为（通常传入 runtime.GOOS）。
+// $SHELL 为空或未知时，sourceCmd 为空串（表示无法确定具体 source 命令），
+// 但仍返回包含多个常见配置文件的 shellProfile（回退到兼容写入）。
+func detectShellProfile(goos string) shellProfile {
+	shell := os.Getenv("SHELL")
+
+	switch {
+	case strings.Contains(shell, "zsh"):
+		return shellProfile{
+			configFiles: []string{".zshrc"},
+			sourceCmd:   "source ~/.zshrc",
+		}
+	case strings.Contains(shell, "fish"):
+		return shellProfile{
+			configFiles: []string{".config/fish/config.fish"},
+			sourceCmd:   "source ~/.config/fish/config.fish",
+			isFish:      true,
+		}
+	case strings.Contains(shell, "bash"):
+		if goos == "darwin" {
+			return shellProfile{
+				configFiles: []string{".bash_profile"},
+				sourceCmd:   "source ~/.bash_profile",
+			}
+		}
+		return shellProfile{
+			configFiles: []string{".bashrc"},
+			sourceCmd:   "source ~/.bashrc",
+		}
+	default:
+		// $SHELL 为空或未知 shell：回退到写全部常见文件（兼容旧行为）
+		if goos == "darwin" {
+			return shellProfile{configFiles: []string{".zshrc", ".bash_profile"}}
+		}
+		return shellProfile{configFiles: []string{".bashrc", ".profile"}}
+	}
+}
+
 // setEnvVarsWindows 在 Windows 上批量设置用户环境变量（使用 SETX 并行执行）
 func setEnvVarsWindows(vars map[string]string) error {
 	var wg sync.WaitGroup
@@ -530,30 +577,70 @@ func setEnvVarsUnix(vars map[string]string) error {
 		return err
 	}
 
-	// 确定要写入的配置文件
-	var configFiles []string
-	switch runtime.GOOS {
-	case "darwin":
-		configFiles = []string{".zshrc", ".bash_profile"}
-	default:
-		configFiles = []string{".bashrc", ".profile"}
-	}
+	profile := detectShellProfile(runtime.GOOS)
 
 	// 写入配置文件
-	for _, configFile := range configFiles {
+	for _, configFile := range profile.configFiles {
 		configPath := filepath.Join(homeDir, configFile)
 
-		// macOS 特殊处理：如果是 .zshrc 且不存在，则创建
-		if runtime.GOOS == "darwin" && configFile == ".zshrc" {
-			if _, err := os.Stat(configPath); os.IsNotExist(err) {
-				// 创建空的 .zshrc 文件
+		if profile.isFish {
+			// fish shell：确保目录存在，然后写入 set -Ux 语法
+			if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+				return fmt.Errorf("创建 %s 目录失败: %v", filepath.Dir(configPath), err)
+			}
+			// 读取现有内容（文件不存在时从空内容开始）
+			var existingContent []byte
+			if _, statErr := os.Stat(configPath); statErr == nil {
+				existingContent, _ = os.ReadFile(configPath)
+			}
+			normalized := strings.ReplaceAll(string(existingContent), "\r\n", "\n")
+			normalized = strings.ReplaceAll(normalized, "\r", "\n")
+			lines := strings.Split(normalized, "\n")
+			newLines := make([]string, 0, len(lines))
+			foundKeys := make(map[string]bool)
+
+			for _, line := range lines {
+				replaced := false
+				for key, value := range vars {
+					if value == "" {
+						continue
+					}
+					marker := fmt.Sprintf("set -Ux %s ", key)
+					if strings.HasPrefix(strings.TrimSpace(line), marker) {
+						newLines = append(newLines, fmt.Sprintf("set -Ux %s %s", key, value))
+						foundKeys[key] = true
+						replaced = true
+						break
+					}
+				}
+				if !replaced {
+					newLines = append(newLines, line)
+				}
+			}
+			for key, value := range vars {
+				if value == "" || foundKeys[key] {
+					continue
+				}
+				newLines = append(newLines, fmt.Sprintf("set -Ux %s %s", key, value))
+			}
+			newContent := strings.Join(newLines, "\n")
+			if !strings.HasSuffix(newContent, "\n") {
+				newContent += "\n"
+			}
+			if err := os.WriteFile(configPath, []byte(newContent), 0644); err != nil {
+				return fmt.Errorf("写入 %s 失败: %v", configPath, err)
+			}
+			continue
+		}
+
+		// bash / zsh / 回退路径：使用 export KEY='VALUE' 语法
+		// 主配置文件（如 .zshrc）不存在时自动创建；其余文件不存在则跳过
+		if _, err := os.Stat(configPath); os.IsNotExist(err) {
+			if configFile == profile.configFiles[0] {
 				if err := os.WriteFile(configPath, []byte(""), 0600); err != nil {
 					return fmt.Errorf("创建 %s 失败: %v", configPath, err)
 				}
-			}
-		} else {
-			// 其他文件：不存在则跳过
-			if _, err := os.Stat(configPath); os.IsNotExist(err) {
+			} else {
 				continue
 			}
 		}
@@ -563,14 +650,12 @@ func setEnvVarsUnix(vars map[string]string) error {
 			continue
 		}
 
-		// 统一行尾符：\r\n → \n，\r → \n（兼容 Windows 编辑过的文件）
 		normalized := strings.ReplaceAll(string(content), "\r\n", "\n")
 		normalized = strings.ReplaceAll(normalized, "\r", "\n")
 		lines := strings.Split(normalized, "\n")
 		newLines := make([]string, 0, len(lines))
 		foundKeys := make(map[string]bool)
 
-		// 遍历现有行，替换已存在的变量
 		for _, line := range lines {
 			replaced := false
 			for key, value := range vars {
@@ -591,7 +676,6 @@ func setEnvVarsUnix(vars map[string]string) error {
 			}
 		}
 
-		// 添加未找到的变量
 		for key, value := range vars {
 			if value == "" || foundKeys[key] {
 				continue
@@ -616,19 +700,16 @@ func removeEnvVarUnix(key string) error {
 		return err
 	}
 
-	var configFiles []string
-	switch runtime.GOOS {
-	case "darwin":
-		configFiles = []string{".zshrc", ".bash_profile"}
-	default:
-		configFiles = []string{".bashrc", ".profile"}
-	}
+	profile := detectShellProfile(runtime.GOOS)
 
-	marker := fmt.Sprintf("export %s=", key)
-	for _, configFile := range configFiles {
+	// fish shell 用 set -e 语法删除变量
+	fishMarker := fmt.Sprintf("set -Ux %s ", key)
+	exportMarker := fmt.Sprintf("export %s=", key)
+
+	for _, configFile := range profile.configFiles {
 		configPath := filepath.Join(homeDir, configFile)
 		if _, err := os.Stat(configPath); os.IsNotExist(err) {
-			continue
+			continue // 文件不存在，无需删除
 		}
 		content, err := os.ReadFile(configPath)
 		if err != nil {
@@ -643,13 +724,20 @@ func removeEnvVarUnix(key string) error {
 		normalized = strings.ReplaceAll(normalized, "\r", "\n")
 		lines := strings.Split(normalized, "\n")
 
+		// 根据 shell 选择要删除的行标记
+		var lineMarker string
+		if profile.isFish {
+			lineMarker = fishMarker
+		} else {
+			lineMarker = exportMarker
+		}
+
 		newLines := make([]string, 0, len(lines))
 		prevBlank := false
 		for _, line := range lines {
-			if strings.HasPrefix(strings.TrimSpace(line), marker) {
-				continue // 跳过该变量行
+			if strings.HasPrefix(strings.TrimSpace(line), lineMarker) {
+				continue
 			}
-			// 压缩连续空行
 			isBlank := strings.TrimSpace(line) == ""
 			if isBlank && prevBlank {
 				continue
@@ -658,7 +746,6 @@ func removeEnvVarUnix(key string) error {
 			prevBlank = isBlank
 		}
 
-		// 确保文件末尾有换行符
 		newContent := strings.Join(newLines, "\n")
 		if !strings.HasSuffix(newContent, "\n") {
 			newContent += "\n"
@@ -1636,10 +1723,13 @@ func configureAgentTeams() {
 	switch runtime.GOOS {
 	case "windows":
 		printTip("请重新打开终端窗口使配置生效")
-	case "darwin":
-		printTip("执行 source ~/.zshrc 或重启终端使配置生效")
 	default:
-		printTip("执行 source ~/.bashrc 或重启终端使配置生效")
+		profile := detectShellProfile(runtime.GOOS)
+		if profile.sourceCmd != "" {
+			printTip(fmt.Sprintf("执行 %s 或重启终端使配置生效", profile.sourceCmd))
+		} else {
+			printTip("重启终端使配置生效")
+		}
 		if isWSL() {
 			fmt.Println()
 			printTip("注意：WSL 环境下，环境变量仅在当前 WSL 会话有效")
@@ -1680,17 +1770,23 @@ func printSummary(cfg Config) {
 	printBox("配置摘要", colorBrightWhite, lines)
 
 	fmt.Println()
-	// TODO(Task4-Step4.5): 以下 switch 块将被完全替换
 	switch runtime.GOOS {
 	case "windows":
 		printTip("配置已保存到用户环境变量")
 		printTip("请重新打开终端窗口使配置生效")
-	case "darwin":
-		printTip("配置已写入 ~/.zshrc 和 ~/.bash_profile")
-		printTip("执行 source ~/.zshrc 或重启终端使配置生效")
 	default:
-		printTip("配置已写入 ~/.bashrc 和 ~/.profile")
-		printTip("执行 source ~/.bashrc 或重启终端使配置生效")
+		profile := detectShellProfile(runtime.GOOS)
+		// 构建写入文件列表的显示文本
+		displayFiles := make([]string, len(profile.configFiles))
+		for i, f := range profile.configFiles {
+			displayFiles[i] = "~/" + f
+		}
+		printTip(fmt.Sprintf("配置已写入 %s", strings.Join(displayFiles, " 和 ")))
+		if profile.sourceCmd != "" {
+			printTip(fmt.Sprintf("执行 %s 或重启终端使配置生效", profile.sourceCmd))
+		} else {
+			printTip("重启终端使配置生效")
+		}
 		if isWSL() {
 			fmt.Println()
 			printTip("注意：WSL 环境下，环境变量仅在当前 WSL 会话有效")

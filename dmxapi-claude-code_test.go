@@ -94,3 +94,48 @@ func TestSetxOrRegAdd(t *testing.T) {
 		t.Errorf("超长值（901字节）应使用 REG_ADD")
 	}
 }
+
+func TestDetectShellProfile(t *testing.T) {
+	cases := []struct {
+		shellEnv string
+		goos     string
+		wantFile string   // configFiles[0] 的期望值
+		wantSrc  string   // sourceCmd 期望值
+		wantFish bool
+	}{
+		// macOS 场景
+		{"/bin/zsh", "darwin", ".zshrc", "source ~/.zshrc", false},
+		{"/bin/bash", "darwin", ".bash_profile", "source ~/.bash_profile", false},
+		{"/usr/local/bin/fish", "darwin", ".config/fish/config.fish", "source ~/.config/fish/config.fish", true},
+		// Linux 场景
+		{"/bin/zsh", "linux", ".zshrc", "source ~/.zshrc", false},
+		{"/bin/bash", "linux", ".bashrc", "source ~/.bashrc", false},
+		{"/usr/bin/fish", "linux", ".config/fish/config.fish", "source ~/.config/fish/config.fish", true},
+		// 非标准 shell 路径
+		{"/opt/homebrew/bin/zsh", "darwin", ".zshrc", "source ~/.zshrc", false},
+		// 空 SHELL 变量回退
+		{"", "darwin", ".zshrc", "", false},
+		{"", "linux", ".bashrc", "", false},
+	}
+
+	for _, c := range cases {
+		t.Setenv("SHELL", c.shellEnv)
+		profile := detectShellProfile(c.goos)
+		if len(profile.configFiles) == 0 {
+			t.Errorf("SHELL=%q GOOS=%q: configFiles 为空", c.shellEnv, c.goos)
+			continue
+		}
+		if profile.configFiles[0] != c.wantFile {
+			t.Errorf("SHELL=%q GOOS=%q: configFiles[0]=%q, want %q",
+				c.shellEnv, c.goos, profile.configFiles[0], c.wantFile)
+		}
+		if c.shellEnv != "" && profile.sourceCmd != c.wantSrc {
+			t.Errorf("SHELL=%q GOOS=%q: sourceCmd=%q, want %q",
+				c.shellEnv, c.goos, profile.sourceCmd, c.wantSrc)
+		}
+		if profile.isFish != c.wantFish {
+			t.Errorf("SHELL=%q GOOS=%q: isFish=%v, want %v",
+				c.shellEnv, c.goos, profile.isFish, c.wantFish)
+		}
+	}
+}
