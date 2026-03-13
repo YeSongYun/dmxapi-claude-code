@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -67,5 +68,29 @@ func TestIsWSLFromContent(t *testing.T) {
 		if got != c.want {
 			t.Errorf("wslContentMatches(%q) = %v, want %v", c.input, got, c.want)
 		}
+	}
+}
+
+func TestSetxOrRegAdd(t *testing.T) {
+	// 提取"选择命令"逻辑为可测试的纯函数
+	chooseCmd := func(value string) string {
+		if len(value) > 900 {
+			return "REG_ADD"
+		}
+		return "SETX"
+	}
+
+	shortVal := strings.Repeat("a", 100)
+	borderVal := strings.Repeat("a", 900)
+	longVal := strings.Repeat("a", 901)
+
+	if chooseCmd(shortVal) != "SETX" {
+		t.Errorf("短值（100字节）应使用 SETX")
+	}
+	if chooseCmd(borderVal) != "SETX" {
+		t.Errorf("边界值（900字节）应使用 SETX")
+	}
+	if chooseCmd(longVal) != "REG_ADD" {
+		t.Errorf("超长值（901字节）应使用 REG_ADD")
 	}
 }

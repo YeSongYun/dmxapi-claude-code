@@ -493,9 +493,20 @@ func setEnvVarsWindows(vars map[string]string) error {
 		wg.Add(1)
 		go func(k, v string) {
 			defer wg.Done()
-			// setx KEY "VALUE" 设置用户环境变量
-			if err := runCommand("setx", k, v); err != nil {
-				errChan <- fmt.Errorf("设置环境变量 %s 失败: %v", k, err)
+			var err error
+			if len(v) > 900 {
+				// setx 有 1024 字节上限，超长值改用 REG ADD 直接写注册表
+				err = runCommand("REG", "ADD", `HKCU\Environment`, "/V", k, "/T", "REG_SZ", "/D", v, "/F")
+				if err != nil {
+					errChan <- fmt.Errorf("设置环境变量 %s 失败（token 过长，注册表写入错误）：%v\n请重启终端后重试，或以管理员权限运行", k, err)
+					return
+				}
+			} else {
+				// 普通路径：使用 setx
+				err = runCommand("setx", k, v)
+				if err != nil {
+					errChan <- fmt.Errorf("设置环境变量 %s 失败: %v", k, err)
+				}
 			}
 		}(key, value)
 	}
