@@ -607,6 +607,11 @@ func removeEnvVarUnix(key string) error {
 		if err != nil {
 			continue
 		}
+		info, statErr := os.Stat(configPath)
+		perm := os.FileMode(0644)
+		if statErr == nil {
+			perm = info.Mode()
+		}
 		normalized := strings.ReplaceAll(string(content), "\r\n", "\n")
 		normalized = strings.ReplaceAll(normalized, "\r", "\n")
 		lines := strings.Split(normalized, "\n")
@@ -631,7 +636,7 @@ func removeEnvVarUnix(key string) error {
 		if !strings.HasSuffix(newContent, "\n") {
 			newContent += "\n"
 		}
-		if err := os.WriteFile(configPath, []byte(newContent), 0644); err != nil {
+		if err := os.WriteFile(configPath, []byte(newContent), perm); err != nil {
 			return fmt.Errorf("写入 %s 失败: %v", configPath, err)
 		}
 	}
@@ -644,8 +649,11 @@ func removeEnvVarWindows(key string) error {
 	err := runCommand("REG", "DELETE", `HKCU\Environment`, "/V", key, "/F")
 	if err != nil {
 		// 降级：setx 设置为空（Windows 下可能不完全清除，打印警告）
-		_ = runCommand("setx", key, "")
+		setxErr := runCommand("setx", key, "")
 		printWarning(fmt.Sprintf("无法完全清除 %s，请手动在系统环境变量中删除该项", key))
+		if setxErr != nil {
+			return fmt.Errorf("删除 %s 失败: REG DELETE 和 setx 均出错", key)
+		}
 	}
 	return nil
 }
