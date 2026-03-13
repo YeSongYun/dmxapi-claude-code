@@ -14,7 +14,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -88,7 +90,7 @@ const (
 	styleBold = "\033[1m"
 	styleDim  = "\033[2m"
 	// 版本号
-	appVersion = "1.0.0"
+	appVersion = "1.4.4"
 	// 统一盒子内容宽度（不含左右边框字符）
 	boxWidth = 60
 )
@@ -1541,6 +1543,102 @@ func checkClaudeCodeInstalled() bool {
 	return err == nil
 }
 
+// compareVersions 比较两个版本号字符串（major.minor.patch 格式）
+// 返回 -1（a<b）、0（a==b）、1（a>b）
+// 段数不足3段时补0；任何段解析失败返回0
+func compareVersions(a, b string) int {
+	parseSegments := func(v string) ([3]int, bool) {
+		parts := strings.SplitN(v, ".", 4) // 最多取3段
+		var segs [3]int
+		for i := 0; i < 3; i++ {
+			if i < len(parts) {
+				n, err := strconv.Atoi(parts[i])
+				if err != nil {
+					return [3]int{}, false // 解析失败
+				}
+				segs[i] = n
+			}
+		}
+		return segs, true
+	}
+	sa, okA := parseSegments(a)
+	sb, okB := parseSegments(b)
+	if !okA || !okB {
+		return 0 // 任何段解析失败返回0
+	}
+	for i := 0; i < 3; i++ {
+		if sa[i] < sb[i] {
+			return -1
+		}
+		if sa[i] > sb[i] {
+			return 1
+		}
+	}
+	return 0
+}
+
+// fetchLatestVersion 从 CNB releases 页面获取最新版本号（不含 v 前缀）
+// 失败时返回空字符串（静默跳过）
+func fetchLatestVersion() string {
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get("https://cnb.cool/dmxapi/dmxapi_claude_code/-/releases")
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return ""
+	}
+	// 读取前 64KB，足以覆盖 initialState 中的第一个 tagRef
+	buf := make([]byte, 65536)
+	n, _ := resp.Body.Read(buf)
+	body := string(buf[:n])
+
+	// CNB releases 页面为 SSR，tagRef 按发布时间倒序，第一条即最新版
+	re := regexp.MustCompile(`"tagRef":"refs/tags/(v\d+\.\d+\.\d+)"`)
+	match := re.FindStringSubmatch(body)
+	if len(match) < 2 {
+		return ""
+	}
+	// 去掉 "v" 前缀，返回如 "1.4.5"
+	return strings.TrimPrefix(match[1], "v")
+}
+
+// openBrowser 用系统命令打开浏览器，失败时打印链接
+func openBrowser(url string) {
+	var err error
+	switch runtime.GOOS {
+	case "windows":
+		err = exec.Command("cmd", "/c", "start", "", url).Start()
+	case "darwin":
+		err = exec.Command("open", url).Start()
+	default:
+		err = exec.Command("xdg-open", url).Start()
+	}
+	if err != nil {
+		printInfo("请手动访问: " + url)
+	}
+}
+
+// checkForUpdates 检查是否有新版本，有则提示用户
+func checkForUpdates() {
+	latest := fetchLatestVersion()
+	if latest == "" {
+		return // 网络失败或解析失败，静默跳过
+	}
+	if compareVersions(appVersion, latest) >= 0 {
+		return // 当前版本已是最新
+	}
+	fmt.Println()
+	printInfo(fmt.Sprintf("发现新版本 v%s（当前 v%s）", latest, appVersion))
+	fmt.Println()
+	wantDownload := runConfirmMenu(fmt.Sprintf("发现新版本 v%s，是否立即前往下载页？", latest))
+	if wantDownload {
+		openBrowser("https://cnb.cool/dmxapi/dmxapi_claude_code/-/releases")
+		os.Exit(0)
+	}
+}
+
 // ==================== 主程序 ====================
 
 func main() {
@@ -1567,6 +1665,9 @@ func main() {
 		styledInput("按回车键退出")
 		os.Exit(1)
 	}
+
+	// 检查版本更新（失败则静默跳过）
+	checkForUpdates()
 
 	// 选择配置模式
 	configMode := selectConfigMode()
