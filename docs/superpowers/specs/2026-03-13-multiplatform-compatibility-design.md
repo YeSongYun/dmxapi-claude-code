@@ -40,11 +40,12 @@
 - 对应的 `source` 提示命令字符串
 
 ```
-$SHELL 包含 "zsh"  →  ["~/.zshrc"]                          + "source ~/.zshrc"
-$SHELL 包含 "fish" →  ["~/.config/fish/config.fish"]        + "source ~/.config/fish/config.fish"
-$SHELL 包含 "bash" →  macOS: ["~/.bash_profile"]
-                       Linux: ["~/.bashrc"]                  + "source ~/.bashrc / ~/.bash_profile"
-$SHELL 为空或未知  →  回退：写全部常见文件（现有逻辑）
+$SHELL 包含 "zsh"  →  [".zshrc"]                                 + "source ~/.zshrc"
+$SHELL 包含 "fish" →  [".config/fish/config.fish"]               + "source ~/.config/fish/config.fish"
+$SHELL 包含 "bash" →  macOS: [".bash_profile"]                    + "source ~/.bash_profile"
+                       Linux: [".bashrc"]                          + "source ~/.bashrc"
+$SHELL 为空或未知  →  回退：写 [".zshrc", ".bash_profile"]（macOS）
+                              或 [".bashrc", ".profile"]（Linux）
 ```
 
 **返回结构**：
@@ -65,7 +66,7 @@ fish 不使用 `export KEY=VALUE`，而使用：
 
 `setEnvVarsUnix` 和 `removeEnvVarUnix` 均需在 `isFish == true` 时切换到 fish 语法。
 
-**配置目录创建**：fish 配置文件路径 `~/.config/fish/config.fish` 的父目录 `~/.config/fish/` 可能不存在，写入前需调用 `os.MkdirAll` 确保目录存在。
+**配置目录创建**：fish 配置文件路径 `~/.config/fish/config.fish` 的父目录 `~/.config/fish/` 可能不存在。目录创建职责在 `setEnvVarsUnix` 中执行：检测到 `isFish == true` 时，写入配置文件前调用 `os.MkdirAll(filepath.Dir(configPath), 0755)` 确保目录存在。
 
 #### 影响函数
 
@@ -88,16 +89,17 @@ fish 不使用 `export KEY=VALUE`，而使用：
 
 ```
 len(value) > 900
-  → REG ADD "HKCU\Environment" /V KEY /T REG_SZ /D VALUE /F
+  → exec.Command("REG", "ADD", `HKCU\Environment`, "/V", key, "/T", "REG_SZ", "/D", value, "/F")
   → 成功：继续
-  → 失败：返回明确错误，提示用户手动配置
+  → 失败：返回 fmt.Errorf("设置 %s 失败（token 过长，注册表写入错误）：%v\n请重启终端后重试，或以管理员权限运行", key, err)
 否则
-  → setx KEY "VALUE"（现有逻辑不变）
+  → exec.Command("setx", key, value)（现有逻辑不变）
 ```
 
-阈值设为 900 字节（而非 1024），留有余量应对编码膨胀。
-
-注册表写入（`REG ADD HKCU\Environment`）与 `setx` 效果等价，且无长度限制。
+- 阈值设为 900 字节（而非 1024），留有余量应对编码膨胀
+- 注册表写入（`HKCU\Environment`）与 `setx` 效果等价，且无长度限制
+- 调用方式与现有 `removeEnvVarWindows` 一致（`exec.Command("REG", ...)`），无需通过 cmd.exe 中转
+- 写入成功后用户需重启终端才能生效（与 `setx` 行为相同，已有现有提示逻辑，无需额外处理）
 
 ---
 
