@@ -674,6 +674,11 @@ func removeEnvVarWindows(key string) error {
 	return nil
 }
 
+func wslContentMatches(content string) bool {
+	lower := strings.ToLower(content)
+	return strings.Contains(lower, "microsoft") || strings.Contains(lower, "wsl")
+}
+
 // isWSL 检测当前是否运行在 Windows Subsystem for Linux (WSL) 环境中
 // 通过读取 /proc/version 文件内容判断，失败时返回 false（安全静默）
 func isWSL() bool {
@@ -681,8 +686,7 @@ func isWSL() bool {
 	if err != nil {
 		return false
 	}
-	lower := strings.ToLower(string(data))
-	return strings.Contains(lower, "microsoft") || strings.Contains(lower, "wsl")
+	return wslContentMatches(string(data))
 }
 
 // runCommand 执行命令
