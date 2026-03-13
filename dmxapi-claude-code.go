@@ -1545,11 +1545,17 @@ func configureAgentTeams() {
 	if currentVal == "1" {
 		printInfo(fmt.Sprintf("当前状态: %s已启用%s", colorBrightGreen, colorReset))
 	} else {
-		printInfo(fmt.Sprintf("当前状态: %s未设置%s", styleDim, colorReset))
+		printInfo(fmt.Sprintf("当前状态: %s未开启%s", colorRed, colorReset))
 	}
 	fmt.Println()
+	fmt.Printf("  Agent Teams 是 Claude Code 的实验性多智能体协作功能，\n")
+	fmt.Printf("  允许多个 AI 代理并行处理复杂任务。\n")
+	fmt.Println()
+	fmt.Printf("  关闭后将移除 CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS\n")
+	fmt.Printf("  环境变量，Agent Teams 功能将停止工作。\n")
+	fmt.Println()
 
-	enable := runConfirmMenu("是否启用 Agent Teams 功能")
+	enable := runEnableDisableMenu("是否启用 Agent Teams 功能")
 
 	fmt.Println()
 	var err error
