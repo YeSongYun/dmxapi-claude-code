@@ -164,7 +164,7 @@
   }
   ```
 
-- [ ] **Step 2.4：更新 `printSummary` 中的提示（约第 1638 行）**
+- [ ] **Step 2.4：更新 `printSummary` 中的提示（约第 1638 行）**（⚠️ 临时代码，Task 4 Step 4.5 会完全替换此处）
 
   将现有的 switch 块：
 
@@ -461,7 +461,8 @@ type shellProfile struct {
 // detectShellProfile 通过 $SHELL 环境变量检测用户的 shell，
 // 返回对应的配置文件列表和 source 命令。
 // goos 参数用于区分 darwin/linux 行为（通常传入 runtime.GOOS）。
-// $SHELL 为空或未知时返回包含多个常见配置文件的 shellProfile（sourceCmd 为空串）。
+// $SHELL 为空或未知时，sourceCmd 为空串（表示无法确定具体 source 命令），
+// 但仍返回包含多个常见配置文件的 shellProfile（回退到兼容写入）。
 func detectShellProfile(goos string) shellProfile {
     shell := os.Getenv("SHELL")
 
@@ -741,11 +742,7 @@ exportMarker := fmt.Sprintf("export %s=", key)
 for _, configFile := range profile.configFiles {
     configPath := filepath.Join(homeDir, configFile)
     if _, err := os.Stat(configPath); os.IsNotExist(err) {
-        // fish 配置目录可能不存在，删除操作时确保目录存在（写空文件无意义，直接跳过）
-        if profile.isFish {
-            os.MkdirAll(filepath.Dir(configPath), 0755)
-        }
-        continue // 文件不存在无需删除
+        continue // 文件不存在，无需删除
     }
     content, err := os.ReadFile(configPath)
     if err != nil {
@@ -807,23 +804,16 @@ case "windows":
     printTip("请重新打开终端窗口使配置生效")
 default:
     profile := detectShellProfile(runtime.GOOS)
-    if len(profile.configFiles) > 0 {
-        // 构建写入文件列表的显示文本
-        displayFiles := make([]string, len(profile.configFiles))
-        for i, f := range profile.configFiles {
-            displayFiles[i] = "~/" + f
-        }
-        printTip(fmt.Sprintf("配置已写入 %s", strings.Join(displayFiles, " 和 ")))
+    // 构建写入文件列表的显示文本（供两个分支复用）
+    displayFiles := make([]string, len(profile.configFiles))
+    for i, f := range profile.configFiles {
+        displayFiles[i] = "~/" + f
     }
+    printTip(fmt.Sprintf("配置已写入 %s", strings.Join(displayFiles, " 和 ")))
     if profile.sourceCmd != "" {
         printTip(fmt.Sprintf("执行 %s 或重启终端使配置生效", profile.sourceCmd))
     } else {
-        // 回退模式（$SHELL 未知）：无法确定具体命令，但仍告知写入的文件列表
-        displayFiles := make([]string, len(profile.configFiles))
-        for i, f := range profile.configFiles {
-            displayFiles[i] = "~/" + f
-        }
-        printTip(fmt.Sprintf("配置已写入 %s", strings.Join(displayFiles, " 和 ")))
+        // 回退模式（$SHELL 未知）：无法确定具体 source 命令，提示重启终端
         printTip("重启终端使配置生效")
     }
     if isWSL() {
