@@ -37,6 +37,7 @@ const (
 	envSonnetModel = "ANTHROPIC_DEFAULT_SONNET_MODEL"
 	envOpusModel               = "ANTHROPIC_DEFAULT_OPUS_MODEL"
 	envDisableExperimentalBetas = "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"
+	envAgentTeams               = "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"
 
 	// 默认模型值
 	defaultModel       = "claude-sonnet-4-6-cc"
@@ -581,6 +582,74 @@ func setEnvVarsUnix(vars map[string]string) error {
 	return nil
 }
 
+// removeEnvVarUnix 从 Unix shell 配置文件中删除指定环境变量（幂等）
+func removeEnvVarUnix(key string) error {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+
+	var configFiles []string
+	switch runtime.GOOS {
+	case "darwin":
+		configFiles = []string{".zshrc", ".bash_profile"}
+	default:
+		configFiles = []string{".bashrc", ".profile"}
+	}
+
+	marker := fmt.Sprintf("export %s=", key)
+	for _, configFile := range configFiles {
+		configPath := filepath.Join(homeDir, configFile)
+		if _, err := os.Stat(configPath); os.IsNotExist(err) {
+			continue
+		}
+		content, err := os.ReadFile(configPath)
+		if err != nil {
+			continue
+		}
+		normalized := strings.ReplaceAll(string(content), "\r\n", "\n")
+		normalized = strings.ReplaceAll(normalized, "\r", "\n")
+		lines := strings.Split(normalized, "\n")
+
+		newLines := make([]string, 0, len(lines))
+		prevBlank := false
+		for _, line := range lines {
+			if strings.HasPrefix(strings.TrimSpace(line), marker) {
+				continue // 跳过该变量行
+			}
+			// 压缩连续空行
+			isBlank := strings.TrimSpace(line) == ""
+			if isBlank && prevBlank {
+				continue
+			}
+			newLines = append(newLines, line)
+			prevBlank = isBlank
+		}
+
+		// 确保文件末尾有换行符
+		newContent := strings.Join(newLines, "\n")
+		if !strings.HasSuffix(newContent, "\n") {
+			newContent += "\n"
+		}
+		if err := os.WriteFile(configPath, []byte(newContent), 0644); err != nil {
+			return fmt.Errorf("写入 %s 失败: %v", configPath, err)
+		}
+	}
+	return nil
+}
+
+// removeEnvVarWindows 从 Windows 用户环境变量中删除指定变量
+func removeEnvVarWindows(key string) error {
+	// 优先用 REG DELETE 删除注册表用户变量
+	err := runCommand("REG", "DELETE", `HKCU\Environment`, "/V", key, "/F")
+	if err != nil {
+		// 降级：setx 设置为空（Windows 下可能不完全清除，打印警告）
+		_ = runCommand("setx", key, "")
+		printWarning(fmt.Sprintf("无法完全清除 %s，请手动在系统环境变量中删除该项", key))
+	}
+	return nil
+}
+
 // runCommand 执行命令
 func runCommand(name string, args ...string) error {
 	cmd := exec.Command(name, args...)
@@ -750,6 +819,7 @@ func selectConfigMode() int {
 		{"1", "从头配置", "配置 URL、Token 和模型"},
 		{"2", "仅配置模型", "跳过 URL 和 Token 配置"},
 		{"3", "解决 400 报错", "禁用实验性请求头"},
+		{"4", "配置实验性功能", "启用/禁用 Agent Teams"},
 	})
 	fmt.Println()
 
@@ -762,8 +832,10 @@ func selectConfigMode() int {
 			return 2
 		case "3":
 			return 3
+		case "4":
+			return 4
 		default:
-			printError("无效选项，请输入 1、2 或 3")
+			printError("无效选项，请输入 1、2、3 或 4")
 		}
 	}
 }
@@ -1340,6 +1412,69 @@ func saveConfig(cfg Config) error {
 	}
 }
 
+// configureAgentTeams 配置实验性 Agent Teams 功能环境变量
+func configureAgentTeams() {
+	printSectionHeader("配置实验性 Agent Teams 功能")
+	fmt.Println()
+
+	currentVal := getEnvVar(envAgentTeams)
+	if currentVal == "1" {
+		printInfo(fmt.Sprintf("当前状态: %s已启用%s", colorBrightGreen, colorReset))
+	} else {
+		printInfo(fmt.Sprintf("当前状态: %s未设置%s", styleDim, colorReset))
+	}
+	fmt.Println()
+
+	enable := runConfirmMenu("是否启用 Agent Teams 功能")
+
+	fmt.Println()
+	var err error
+	if enable {
+		vars := map[string]string{envAgentTeams: "1"}
+		switch runtime.GOOS {
+		case "windows":
+			err = setEnvVarsWindows(vars)
+		default:
+			err = setEnvVarsUnix(vars)
+		}
+		if err != nil {
+			printError(fmt.Sprintf("设置失败: %v", err))
+		} else {
+			os.Setenv(envAgentTeams, "1")
+			printSuccess(fmt.Sprintf("已启用 %s=1", envAgentTeams))
+		}
+	} else {
+		if currentVal == "" {
+			printInfo("当前未设置该变量，无需操作")
+		} else {
+			switch runtime.GOOS {
+			case "windows":
+				err = removeEnvVarWindows(envAgentTeams)
+			default:
+				err = removeEnvVarUnix(envAgentTeams)
+			}
+			if err != nil {
+				printError(fmt.Sprintf("删除失败: %v", err))
+			} else {
+				os.Unsetenv(envAgentTeams)
+				printSuccess(fmt.Sprintf("已禁用并删除 %s", envAgentTeams))
+			}
+		}
+	}
+
+	fmt.Println()
+	switch runtime.GOOS {
+	case "windows":
+		printTip("请重新打开终端窗口使配置生效")
+	case "darwin":
+		printTip("执行 source ~/.zshrc 或重启终端使配置生效")
+	default:
+		printTip("执行 source ~/.bashrc 或重启终端使配置生效")
+	}
+	fmt.Println()
+	styledInput("按回车键退出")
+}
+
 // printSummary 打印配置摘要
 func printSummary(cfg Config) {
 	fmt.Println()
@@ -1483,6 +1618,9 @@ func main() {
 		printSectionHeader("修复 Claude Code 400 请求头错误")
 		printInfo("禁用实验性请求头，解决 Claude Code 400 传入请求头错误问题")
 		fmt.Println()
+	} else if configMode == 4 {
+		configureAgentTeams()
+		return
 	} else {
 		// 仅配置模型模式
 		if cfg.BaseURL == "" || cfg.AuthToken == "" {
