@@ -85,8 +85,9 @@ chmod +x dmxapi-claude-code-v1.3.3-linux-arm64
 # 确认架构
 uname -m  # 应输出 arm64
 
-# 添加执行权限
+# 添加执行权限并移除 macOS 安全隔离标记
 chmod +x dmxapi-claude-code-v1.3.3-macos-arm64
+xattr -cr dmxapi-claude-code-v1.3.3-macos-arm64
 
 # 运行
 ./dmxapi-claude-code-v1.3.3-macos-arm64
@@ -100,41 +101,15 @@ chmod +x dmxapi-claude-code-v1.3.3-macos-arm64
 # 确认架构
 uname -m  # 应输出 x86_64
 
-# 添加执行权限
+# 添加执行权限并移除 macOS 安全隔离标记
 chmod +x dmxapi-claude-code-v1.3.3-macos-amd64
+xattr -cr dmxapi-claude-code-v1.3.3-macos-amd64
 
 # 运行
 ./dmxapi-claude-code-v1.3.3-macos-amd64
 ```
 
-#### macOS Gatekeeper 安全限制处理
-
-首次运行时 macOS 可能提示"无法验证开发者"或"已损坏"，以下三种方式任选其一：
-
-**方式一（推荐）：命令行移除隔离标记**
-
-```bash
-# 将 <文件名> 替换为实际文件名，如 dmxapi-claude-code-v1.3.3-macos-arm64
-xattr -cr <文件名>
-# 然后正常运行
-./<文件名>
-```
-
-**方式二：通过系统设置允许运行**
-
-1. 尝试运行程序，出现安全提示后点击"完成"（不要点"移到废纸篓"）
-2. 打开 **系统设置 → 隐私与安全性**
-3. 向下滚动，找到"已阻止使用……"的提示，点击**仍要打开**
-4. 在弹出的确认对话框中再次点击**打开**
-
-> macOS Sequoia (15.x) 注意：系统设置路径相同，但界面可能稍有不同。
-
-**方式三：Finder 右键打开（临时，仅当次有效）**
-
-1. 在 Finder 中找到下载的文件
-2. 按住 **Control** 键并单击文件（或右键单击）
-3. 选择**打开**
-4. 在弹出的对话框中点击**打开**
+> **说明**：`xattr -cr` 用于移除 macOS 对从网络下载文件添加的隔离标记（`com.apple.quarantine`），是 macOS 运行未签名可执行文件的必要步骤。若跳过此步骤，系统可能提示"无法验证开发者"或"已损坏，无法打开"。
 
 ## 配置的环境变量
 
@@ -171,7 +146,13 @@ echo $env:ANTHROPIC_BASE_URL
 
 **Q：macOS 提示"无法验证开发者"或"已损坏，无法打开"**
 
-A：这是 macOS Gatekeeper 的安全机制，并非文件损坏。请参考上方 [macOS Gatekeeper 安全限制处理](#macos-gatekeeper-安全限制处理) 章节，推荐使用方式一的命令行方式解决。
+A：这是 macOS Gatekeeper 的安全机制，并非文件损坏。按照上方安装步骤执行 `xattr -cr <文件名>` 移除隔离标记后重新运行即可。若已错过此步骤，单独执行以下命令：
+
+```bash
+xattr -cr dmxapi-claude-code-v1.3.3-macos-arm64  # Apple Silicon
+# 或
+xattr -cr dmxapi-claude-code-v1.3.3-macos-amd64  # Intel
+```
 
 ---
 
