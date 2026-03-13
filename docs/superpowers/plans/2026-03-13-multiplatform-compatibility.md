@@ -182,7 +182,7 @@
   }
   ```
 
-  替换为（WSL 提示将在 Task 4 完成 Shell 检测后进一步精化）：
+  替换为（**注意：此为临时版本，Task 4 Step 4.5 会将此 switch 替换为 `detectShellProfile()` 动态版本**）：
 
   ```go
   switch runtime.GOOS {
@@ -461,7 +461,7 @@ type shellProfile struct {
 // detectShellProfile 通过 $SHELL 环境变量检测用户的 shell，
 // 返回对应的配置文件列表和 source 命令。
 // goos 参数用于区分 darwin/linux 行为（通常传入 runtime.GOOS）。
-// 检测失败或 shell 未知时回退到现有的多文件写入逻辑。
+// $SHELL 为空或未知时返回包含多个常见配置文件的 shellProfile（sourceCmd 为空串）。
 func detectShellProfile(goos string) shellProfile {
     shell := os.Getenv("SHELL")
 
@@ -741,7 +741,11 @@ exportMarker := fmt.Sprintf("export %s=", key)
 for _, configFile := range profile.configFiles {
     configPath := filepath.Join(homeDir, configFile)
     if _, err := os.Stat(configPath); os.IsNotExist(err) {
-        continue
+        // fish 配置目录可能不存在，删除操作时确保目录存在（写空文件无意义，直接跳过）
+        if profile.isFish {
+            os.MkdirAll(filepath.Dir(configPath), 0755)
+        }
+        continue // 文件不存在无需删除
     }
     content, err := os.ReadFile(configPath)
     if err != nil {
@@ -814,6 +818,12 @@ default:
     if profile.sourceCmd != "" {
         printTip(fmt.Sprintf("执行 %s 或重启终端使配置生效", profile.sourceCmd))
     } else {
+        // 回退模式（$SHELL 未知）：无法确定具体命令，但仍告知写入的文件列表
+        displayFiles := make([]string, len(profile.configFiles))
+        for i, f := range profile.configFiles {
+            displayFiles[i] = "~/" + f
+        }
+        printTip(fmt.Sprintf("配置已写入 %s", strings.Join(displayFiles, " 和 ")))
         printTip("重启终端使配置生效")
     }
     if isWSL() {
