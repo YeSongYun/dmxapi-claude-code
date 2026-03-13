@@ -1181,6 +1181,60 @@ func runConfirmMenu(question string) bool {
 	}
 }
 
+// runEnableDisableMenu 运行启用/禁用确认菜单，返回是否启用（true=启用，false=禁用）
+// 默认选中"禁用"（索引1）
+func runEnableDisableMenu(question string) bool {
+	restore, err := enterRawMode()
+	if err != nil {
+		// 降级：非终端时用数字选项
+		printMenu(question, []MenuItem{
+			{"1", "启用", "开启 Agent Teams 功能"},
+			{"2", "禁用", "关闭 Agent Teams 功能"},
+		})
+		fmt.Println()
+		for {
+			input := styledInput("选项")
+			switch input {
+			case "1":
+				return true
+			case "2":
+				return false
+			default:
+				printError("请输入 1 或 2")
+			}
+		}
+	}
+	defer restore()
+
+	selectedIdx := 1 // 默认"禁用"
+	linesPrinted := 0
+
+	for {
+		linesPrinted = renderConfirmMenuCore(
+			question,
+			[2]string{"启用", "禁用"},
+			[2]string{"开启 Agent Teams 功能", "关闭 Agent Teams 功能"},
+			selectedIdx,
+			linesPrinted,
+		)
+		key := readRawKey()
+		switch key {
+		case KeyUp:
+			selectedIdx = (selectedIdx - 1 + 2) % 2
+		case KeyDown:
+			selectedIdx = (selectedIdx + 1) % 2
+		case KeyEnter:
+			restore()
+			clearMenuLines(linesPrinted)
+			return selectedIdx == 0
+		case KeyEsc:
+			restore()
+			clearMenuLines(linesPrinted)
+			return false
+		}
+	}
+}
+
 // renderL1Menu 渲染一级菜单，返回渲染行数（固定10行）
 func renderL1Menu(entries []modelTypeEntry, selectedIdx int, linesPrinted int) int {
 	if linesPrinted > 0 {
