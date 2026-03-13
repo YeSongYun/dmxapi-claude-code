@@ -65,6 +65,8 @@ fish 不使用 `export KEY=VALUE`，而使用：
 
 `setEnvVarsUnix` 和 `removeEnvVarUnix` 均需在 `isFish == true` 时切换到 fish 语法。
 
+**配置目录创建**：fish 配置文件路径 `~/.config/fish/config.fish` 的父目录 `~/.config/fish/` 可能不存在，写入前需调用 `os.MkdirAll` 确保目录存在。
+
 #### 影响函数
 
 - `setEnvVarsUnix`：改为调用 `detectShellProfile()` 获取文件列表和格式
@@ -161,10 +163,10 @@ if r >= 0x40 && r <= 0x7E { inEscape = false }
 
 ## 不在范围内
 
-- fish shell 支持：设计中已包含架构，但需用户明确要求才实现（当前先实现检测+提示，写入改用标准 `export` 或提示用户手动）
 - macOS Gatekeeper 提示：已在 CI release notes 中处理，无需在工具内重复
 - `build.sh` 补充：独立任务，不在本次范围
 - Windows ARM64 支持：当前无此编译目标，不在本次范围
+- 已被截断 token 的自动恢复检测：超出本次修复范围，用户重新运行配置工具即可修复
 
 ---
 
@@ -174,6 +176,7 @@ if r >= 0x40 && r <= 0x7E { inEscape = false }
 - [ ] macOS bash 用户（`$SHELL=/bin/bash`）：写入 `~/.bash_profile`，提示 `source ~/.bash_profile`
 - [ ] Linux bash 用户：写入 `~/.bashrc`
 - [ ] Linux zsh 用户：写入 `~/.zshrc`
+- [ ] Linux fish 用户：写入 `~/.config/fish/config.fish`（自动创建目录），使用 `set -Ux` 语法
 - [ ] 未知 shell（`$SHELL` 为空）：回退写全部文件
 - [ ] Windows：短 token（<900字节）用 `setx`，长 token 用 `REG ADD`
 - [ ] WSL：`isWSL()` 返回 true，显示额外提示
