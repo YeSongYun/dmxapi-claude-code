@@ -1069,9 +1069,9 @@ func clearMenuLines(n int) {
 	fmt.Printf("\033[%dA", n)
 }
 
-// renderConfirmMenu 渲染确认菜单，返回渲染行数（固定8行）
-// selectedIdx: 0=是, 1=否
-func renderConfirmMenu(question string, selectedIdx int, linesPrinted int) int {
+// renderConfirmMenuCore 渲染确认菜单核心逻辑，返回渲染行数（固定8行）
+// selectedIdx: 0=选项1, 1=选项2
+func renderConfirmMenuCore(question string, labels [2]string, descs [2]string, selectedIdx int, linesPrinted int) int {
 	if linesPrinted > 0 {
 		fmt.Printf("\033[%dA", linesPrinted)
 	}
@@ -1092,8 +1092,6 @@ func renderConfirmMenu(question string, selectedIdx int, linesPrinted int) int {
 		strings.Repeat(" ", lPad), styleBold+colorBrightWhite, question, colorReset, strings.Repeat(" ", rPad))
 	fmt.Printf("├%s┤\033[K\r\n", border)
 
-	labels := [2]string{"是", "否"}
-	descs := [2]string{"确认修改", "保持当前值不变"}
 	for i := 0; i < 2; i++ {
 		label := labels[i]
 		desc := descs[i]
@@ -1121,6 +1119,18 @@ func renderConfirmMenu(question string, selectedIdx int, linesPrinted int) int {
 	fmt.Printf("  %s↑↓ 导航%s  %sEnter 确认%s\033[K\r\n",
 		styleDim, colorReset, styleDim, colorReset)
 	return 8
+}
+
+// renderConfirmMenu 渲染默认确认菜单（是/否），返回渲染行数（固定8行）
+// selectedIdx: 0=是, 1=否
+func renderConfirmMenu(question string, selectedIdx int, linesPrinted int) int {
+	return renderConfirmMenuCore(
+		question,
+		[2]string{"是", "否"},
+		[2]string{"确认修改", "保持当前值不变"},
+		selectedIdx,
+		linesPrinted,
+	)
 }
 
 // runConfirmMenu 运行确认菜单，返回是否确认（true=是，false=否）
