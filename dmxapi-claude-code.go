@@ -825,56 +825,22 @@ func getNewAuthToken(existing, hostname string) string {
 // selectConfigMode 选择配置模式
 // 返回值: 1 = 从头配置, 2 = 仅配置模型, 3 = 解决 400 报错, 4 = 配置实验性功能
 func selectConfigMode() int {
-	printMenu("配置模式选择", []MenuItem{
+	return runItemMenu("配置模式选择", []MenuItem{
 		{"1", "从头配置", "配置 URL、Token 和模型"},
 		{"2", "仅配置模型", "跳过 URL 和 Token 配置"},
 		{"3", "解决 400 报错", "禁用实验性请求头"},
 		{"4", "配置实验性功能", "启用/禁用 Agent Teams"},
 	})
-	fmt.Println()
-
-	for {
-		input := styledInput("选项")
-		switch input {
-		case "1":
-			return 1
-		case "2":
-			return 2
-		case "3":
-			return 3
-		case "4":
-			return 4
-		default:
-			printError("无效选项，请输入 1、2、3 或 4")
-		}
-	}
 }
 
 // selectFixOption 让用户选择要修改的内容
 func selectFixOption() int {
-	printMenu("选择要修改的内容", []MenuItem{
+	return runItemMenu("选择要修改的内容", []MenuItem{
 		{"1", "修改 URL", "Base URL 有问题"},
 		{"2", "修改 Key", "API Key 有问题"},
 		{"3", "都修改", "URL 和 Key 都有问题"},
 		{"4", "修改模型名", "模型名称可能不正确"},
 	})
-	fmt.Println()
-
-	for {
-		input := styledInput("选项")
-		switch input {
-		case "1":
-			return 1
-		case "2":
-			return 2
-		case "3":
-			return 3
-		case "4":
-			return 4
-		default:
-			printError("无效选项，请输入 1、2、3 或 4")
-		}
-	}
 }
 
 // inputNewBaseURL 输入新的 Base URL（无需确认是否修改）
@@ -906,6 +872,90 @@ func inputNewAuthToken(hostname string) string {
 			continue
 		}
 		return strings.TrimSpace(input)
+	}
+}
+
+// renderItemMenu 渲染通用条目菜单，返回渲染行数（len(items)+6）
+func renderItemMenu(title string, items []MenuItem, selectedIdx int, linesPrinted int) int {
+	if linesPrinted > 0 {
+		fmt.Printf("\033[%dA", linesPrinted)
+	}
+	border := strings.Repeat("─", boxWidth)
+	fmt.Printf("╭%s╮\033[K\r\n", border)
+	titleW := visibleLength(title)
+	lPad := (boxWidth - titleW) / 2
+	rPad := boxWidth - titleW - lPad
+	fmt.Printf("│%s%s%s%s%s│\033[K\r\n",
+		strings.Repeat(" ", lPad), styleBold+colorBrightWhite, title, colorReset, strings.Repeat(" ", rPad))
+	fmt.Printf("├%s┤\033[K\r\n", border)
+	for i, item := range items {
+		labelW := visibleLength(item.Label)
+		descW := visibleLength(item.Desc)
+		pad := boxWidth - 5 - labelW - descW
+		if pad < 0 {
+			pad = 0
+		}
+		if i == selectedIdx {
+			fmt.Printf("│ %s❯ %s%s  %s%s%s%s│\033[K\r\n",
+				colorBrightCyan+styleBold,
+				item.Label, colorReset,
+				colorBrightCyan, item.Desc, colorReset,
+				strings.Repeat(" ", pad))
+		} else {
+			fmt.Printf("│ %s  %s%s  %s%s%s%s│\033[K\r\n",
+				styleDim,
+				item.Label, colorReset,
+				styleDim, item.Desc, colorReset,
+				strings.Repeat(" ", pad))
+		}
+	}
+	fmt.Printf("╰%s╯\033[K\r\n", border)
+	fmt.Printf("\033[K\r\n")
+	fmt.Printf("  %s↑↓ 导航%s  %sEnter 确认%s\033[K\r\n",
+		styleDim, colorReset, styleDim, colorReset)
+	return len(items) + 6
+}
+
+// runItemMenu 运行通用条目菜单，返回1-based选中索引
+func runItemMenu(title string, items []MenuItem) int {
+	n := len(items)
+	restore, err := enterRawMode()
+	if err != nil {
+		// 降级：数字输入
+		printMenu(title, items)
+		fmt.Println()
+		validKeys := make([]string, n)
+		for i := range items {
+			validKeys[i] = items[i].Key
+		}
+		for {
+			input := styledInput("选项")
+			for i, k := range validKeys {
+				if input == k {
+					return i + 1
+				}
+			}
+			printError(fmt.Sprintf("无效选项，请输入 %s", strings.Join(validKeys, "、")))
+		}
+	}
+	defer restore()
+
+	selectedIdx := 0
+	linesPrinted := 0
+	for {
+		linesPrinted = renderItemMenu(title, items, selectedIdx, linesPrinted)
+		key := readRawKey()
+		switch key {
+		case KeyUp:
+			selectedIdx = (selectedIdx - 1 + n) % n
+		case KeyDown:
+			selectedIdx = (selectedIdx + 1) % n
+		case KeyEnter:
+			restore()
+			clearMenuLines(linesPrinted)
+			return selectedIdx + 1
+		}
+		// ESC 不允许退出（必须做出选择），忽略
 	}
 }
 
