@@ -1545,7 +1545,7 @@ func checkClaudeCodeInstalled() bool {
 
 // compareVersions 比较两个版本号字符串（major.minor.patch 格式）
 // 返回 -1（a<b）、0（a==b）、1（a>b）
-// 段数不足3段时补0；任何段解析失败返回0
+// 段数不足3段时补0；任何段解析失败返回0（视为相等，不触发更新提示）
 func compareVersions(a, b string) int {
 	parseSegments := func(v string) ([3]int, bool) {
 		parts := strings.SplitN(v, ".", 4) // 最多取3段
@@ -1590,9 +1590,12 @@ func fetchLatestVersion() string {
 		return ""
 	}
 	// 读取前 64KB，足以覆盖 initialState 中的第一个 tagRef
-	buf := make([]byte, 65536)
-	n, _ := resp.Body.Read(buf)
-	body := string(buf[:n])
+	lr := io.LimitReader(resp.Body, 65536)
+	data, err := io.ReadAll(lr)
+	if err != nil {
+		return ""
+	}
+	body := string(data)
 
 	// CNB releases 页面为 SSR，tagRef 按发布时间倒序，第一条即最新版
 	re := regexp.MustCompile(`"tagRef":"refs/tags/(v\d+\.\d+\.\d+)"`)
@@ -1627,7 +1630,7 @@ func checkForUpdates() {
 		return // 网络失败或解析失败，静默跳过
 	}
 	if compareVersions(appVersion, latest) >= 0 {
-		return // 当前版本已是最新
+		return // 当前版本已是最新（含版本号解析失败的情况，安全静默跳过）
 	}
 	fmt.Println()
 	printInfo(fmt.Sprintf("发现新版本 v%s（当前 v%s）", latest, appVersion))
