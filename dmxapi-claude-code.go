@@ -1392,12 +1392,38 @@ func maskToken(token string) string {
 	return string(runes[:4]) + "..." + string(runes[len(runes)-4:])
 }
 
+// checkClaudeCodeInstalled 检测 claude 命令是否已安装
+func checkClaudeCodeInstalled() bool {
+	_, err := exec.LookPath("claude")
+	return err == nil
+}
+
 // ==================== 主程序 ====================
 
 func main() {
 	initWindowsConsole()
 	// 显示 Logo
 	printLogo()
+
+	// 检测 Claude Code 是否已安装
+	if !checkClaudeCodeInstalled() {
+		fmt.Println()
+		printError("未检测到 Claude Code，请先安装后再运行此工具")
+		fmt.Println()
+		if runtime.GOOS == "windows" {
+			printInfo("安装命令（PowerShell）:")
+			fmt.Println("  irm https://claude.ai/install.ps1 | iex")
+			fmt.Println()
+			printInfo("安装命令（CMD）:")
+			fmt.Println("  curl -fsSL https://claude.ai/install.cmd -o install.cmd && install.cmd && del install.cmd")
+		} else {
+			printInfo("安装命令（macOS / Linux / WSL）:")
+			fmt.Println("  curl -fsSL https://claude.ai/install.sh | bash")
+		}
+		fmt.Println()
+		styledInput("按回车键退出")
+		os.Exit(1)
+	}
 
 	// 选择配置模式
 	configMode := selectConfigMode()
