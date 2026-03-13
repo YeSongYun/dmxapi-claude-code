@@ -505,7 +505,7 @@ func detectShellProfile(goos string) shellProfile {
 	case strings.Contains(shell, "fish"):
 		return shellProfile{
 			configFiles: []string{".config/fish/config.fish"},
-			sourceCmd:   "source ~/.config/fish/config.fish",
+			sourceCmd:   "", // fish universal 变量（set -Ux）立即在所有会话生效，无需 source
 			isFish:      true,
 		}
 	case strings.Contains(shell, "bash"):
@@ -607,7 +607,7 @@ func setEnvVarsUnix(vars map[string]string) error {
 					}
 					marker := fmt.Sprintf("set -Ux %s ", key)
 					if strings.HasPrefix(strings.TrimSpace(line), marker) {
-						newLines = append(newLines, fmt.Sprintf("set -Ux %s %s", key, value))
+						newLines = append(newLines, fmt.Sprintf("set -Ux %s '%s'", key, strings.ReplaceAll(value, "'", "'\\''")))
 						foundKeys[key] = true
 						replaced = true
 						break
@@ -621,7 +621,7 @@ func setEnvVarsUnix(vars map[string]string) error {
 				if value == "" || foundKeys[key] {
 					continue
 				}
-				newLines = append(newLines, fmt.Sprintf("set -Ux %s %s", key, value))
+				newLines = append(newLines, fmt.Sprintf("set -Ux %s '%s'", key, strings.ReplaceAll(value, "'", "'\\''")))
 			}
 			newContent := strings.Join(newLines, "\n")
 			if !strings.HasSuffix(newContent, "\n") {
@@ -702,7 +702,7 @@ func removeEnvVarUnix(key string) error {
 
 	profile := detectShellProfile(runtime.GOOS)
 
-	// fish shell 用 set -e 语法删除变量
+	// fish shell：扫描并删除 set -Ux 行（set -Ux 是写入时的语法，故匹配它来删除）
 	fishMarker := fmt.Sprintf("set -Ux %s ", key)
 	exportMarker := fmt.Sprintf("export %s=", key)
 

@@ -106,11 +106,11 @@ func TestDetectShellProfile(t *testing.T) {
 		// macOS 场景
 		{"/bin/zsh", "darwin", ".zshrc", "source ~/.zshrc", false},
 		{"/bin/bash", "darwin", ".bash_profile", "source ~/.bash_profile", false},
-		{"/usr/local/bin/fish", "darwin", ".config/fish/config.fish", "source ~/.config/fish/config.fish", true},
+		{"/usr/local/bin/fish", "darwin", ".config/fish/config.fish", "", true},
 		// Linux 场景
 		{"/bin/zsh", "linux", ".zshrc", "source ~/.zshrc", false},
 		{"/bin/bash", "linux", ".bashrc", "source ~/.bashrc", false},
-		{"/usr/bin/fish", "linux", ".config/fish/config.fish", "source ~/.config/fish/config.fish", true},
+		{"/usr/bin/fish", "linux", ".config/fish/config.fish", "", true},
 		// 非标准 shell 路径
 		{"/opt/homebrew/bin/zsh", "darwin", ".zshrc", "source ~/.zshrc", false},
 		// 空 SHELL 变量回退
