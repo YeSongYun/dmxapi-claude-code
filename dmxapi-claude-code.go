@@ -823,7 +823,7 @@ func getNewAuthToken(existing, hostname string) string {
 }
 
 // selectConfigMode 选择配置模式
-// 返回值: 1 = 从头配置, 2 = 仅配置模型, 3 = 解决 400 报错
+// 返回值: 1 = 从头配置, 2 = 仅配置模型, 3 = 解决 400 报错, 4 = 配置实验性功能
 func selectConfigMode() int {
 	printMenu("配置模式选择", []MenuItem{
 		{"1", "从头配置", "配置 URL、Token 和模型"},
@@ -1548,7 +1548,7 @@ func checkClaudeCodeInstalled() bool {
 // 段数不足3段时补0；任何段解析失败返回0（视为相等，不触发更新提示）
 func compareVersions(a, b string) int {
 	parseSegments := func(v string) ([3]int, bool) {
-		parts := strings.SplitN(v, ".", 4) // 最多取3段
+		parts := strings.SplitN(v, ".", 3) // 最多取3段
 		var segs [3]int
 		for i := 0; i < 3; i++ {
 			if i < len(parts) {
@@ -1691,6 +1691,10 @@ func main() {
 		cfg.AuthToken = getNewAuthToken(cfg.AuthToken, hostname)
 
 		// 验证 API 连接（循环直到成功）
+		// 若用户首次配置尚未选择模型，使用默认模型进行验证
+		if cfg.Model == "" {
+			cfg.Model = defaultModel
+		}
 		fmt.Println()
 		for {
 			if err := validateAPIConnection(cfg.BaseURL, cfg.AuthToken, cfg.Model); err != nil {
