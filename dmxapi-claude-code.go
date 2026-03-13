@@ -674,6 +674,17 @@ func removeEnvVarWindows(key string) error {
 	return nil
 }
 
+// isWSL 检测当前是否运行在 Windows Subsystem for Linux (WSL) 环境中
+// 通过读取 /proc/version 文件内容判断，失败时返回 false（安全静默）
+func isWSL() bool {
+	data, err := os.ReadFile("/proc/version")
+	if err != nil {
+		return false
+	}
+	lower := strings.ToLower(string(data))
+	return strings.Contains(lower, "microsoft") || strings.Contains(lower, "wsl")
+}
+
 // runCommand 执行命令
 func runCommand(name string, args ...string) error {
 	cmd := exec.Command(name, args...)
@@ -1614,6 +1625,11 @@ func configureAgentTeams() {
 		printTip("执行 source ~/.zshrc 或重启终端使配置生效")
 	default:
 		printTip("执行 source ~/.bashrc 或重启终端使配置生效")
+		if isWSL() {
+			fmt.Println()
+			printTip("注意：WSL 环境下，环境变量仅在当前 WSL 会话有效")
+			printTip("若需要 Windows 侧程序读取，请在 Windows 侧单独配置")
+		}
 	}
 	fmt.Println()
 	styledInput("按回车键退出")
@@ -1649,6 +1665,7 @@ func printSummary(cfg Config) {
 	printBox("配置摘要", colorBrightWhite, lines)
 
 	fmt.Println()
+	// TODO(Task4-Step4.5): 以下 switch 块将被完全替换
 	switch runtime.GOOS {
 	case "windows":
 		printTip("配置已保存到用户环境变量")
@@ -1659,6 +1676,11 @@ func printSummary(cfg Config) {
 	default:
 		printTip("配置已写入 ~/.bashrc 和 ~/.profile")
 		printTip("执行 source ~/.bashrc 或重启终端使配置生效")
+		if isWSL() {
+			fmt.Println()
+			printTip("注意：WSL 环境下，环境变量仅在当前 WSL 会话有效")
+			printTip("若需要 Windows 侧程序读取，请在 Windows 侧单独配置")
+		}
 	}
 }
 
