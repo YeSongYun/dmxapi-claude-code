@@ -685,6 +685,9 @@ func setEnvVarsUnix(vars map[string]string) error {
 		}
 
 		newContent := strings.Join(newLines, "\n")
+		if !strings.HasSuffix(newContent, "\n") {
+			newContent += "\n"
+		}
 		if err := os.WriteFile(configPath, []byte(newContent), 0644); err != nil {
 			return fmt.Errorf("写入 %s 失败: %v", configPath, err)
 		}
@@ -772,6 +775,8 @@ func removeEnvVarWindows(key string) error {
 	return nil
 }
 
+// wslContentMatches 判断 /proc/version 文件内容是否表明运行在 WSL 环境。
+// 独立为纯函数以便单元测试，I/O 部分由 isWSL() 负责。
 func wslContentMatches(content string) bool {
 	lower := strings.ToLower(content)
 	return strings.Contains(lower, "microsoft") || strings.Contains(lower, "wsl")
