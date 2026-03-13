@@ -600,13 +600,13 @@ type APIResponse struct {
 }
 
 // validateAPIConnection 验证 API 连接
-func validateAPIConnection(baseURL, authToken string) error {
+func validateAPIConnection(baseURL, authToken, model string) error {
 	// 构建测试请求 URL
 	testURL := strings.TrimSuffix(baseURL, "/") + "/v1/messages"
 
 	// 创建一个简单的测试请求体
 	requestBody := map[string]interface{}{
-		"model":      "claude-haiku-4-5-20251001",
+		"model":      model,
 		"max_tokens": 1,
 		"messages": []map[string]string{
 			{"role": "user", "content": "Hi"},
@@ -658,7 +658,7 @@ func validateAPIConnection(baseURL, authToken string) error {
 	case 403:
 		return fmt.Errorf("权限被拒绝: 请检查 API Token 权限")
 	case 404:
-		return fmt.Errorf("API 端点不存在: 请检查 Base URL 是否正确")
+		return fmt.Errorf("API 端点不存在或模型名称不正确: 请检查 Base URL 和模型名")
 	case 429:
 		// 速率限制也表示认证成功
 		return nil
@@ -774,6 +774,7 @@ func selectFixOption() int {
 		{"1", "修改 URL", "Base URL 有问题"},
 		{"2", "修改 Key", "API Key 有问题"},
 		{"3", "都修改", "URL 和 Key 都有问题"},
+		{"4", "修改模型名", "模型名称可能不正确"},
 	})
 	fmt.Println()
 
@@ -786,8 +787,10 @@ func selectFixOption() int {
 			return 2
 		case "3":
 			return 3
+		case "4":
+			return 4
 		default:
-			printError("无效选项，请输入 1、2 或 3")
+			printError("无效选项，请输入 1、2、3 或 4")
 		}
 	}
 }
@@ -1417,7 +1420,7 @@ func main() {
 		// 验证 API 连接（循环直到成功）
 		fmt.Println()
 		for {
-			if err := validateAPIConnection(cfg.BaseURL, cfg.AuthToken); err != nil {
+			if err := validateAPIConnection(cfg.BaseURL, cfg.AuthToken, cfg.Model); err != nil {
 				printError(fmt.Sprintf("API 连接验证失败: %v", err))
 
 				// 显示当前的URL和Key
@@ -1440,6 +1443,8 @@ func main() {
 					cfg.BaseURL = inputNewBaseURL()
 					hostname = extractHost(cfg.BaseURL)
 					cfg.AuthToken = inputNewAuthToken(hostname)
+				case 4: // 修改模型名
+					cfg.Model = runL2Menu("默认模型", cfg.Model)
 				}
 				fmt.Println()
 				continue
