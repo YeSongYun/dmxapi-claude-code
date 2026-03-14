@@ -1185,13 +1185,14 @@ func getNewAuthToken(existing, hostname string) string {
 }
 
 // selectConfigMode 选择配置模式
-// 返回值: 1 = 从头配置, 2 = 仅配置模型, 3 = 解决 400 报错, 4 = 配置实验性功能
+// 返回值: 1 = 从头配置, 2 = 仅配置模型, 3 = 解决 400 报错, 4 = 配置实验性功能, 5 = 配置 VSCode 插件
 func selectConfigMode() int {
 	return runItemMenu("配置模式选择", []MenuItem{
 		{"1", "从头配置", "配置 URL、Token 和模型"},
 		{"2", "仅配置模型", "跳过 URL 和 Token 配置"},
 		{"3", "解决 400 报错", "禁用实验性请求头"},
 		{"4", "配置实验性功能", "启用/禁用 Agent Teams"},
+		{"5", "配置 VSCode 插件", "写入 VSCode settings.json"},
 	})
 }
 
@@ -2243,6 +2244,10 @@ func main() {
 	} else if configMode == 4 {
 		configureAgentTeams(true)
 		return
+	} else if configMode == 5 {
+		cfg := loadExistingConfig()
+		configureVSCode(cfg, true)
+		return
 	} else {
 		// 仅配置模型模式
 		if cfg.BaseURL == "" || cfg.AuthToken == "" {
@@ -2271,6 +2276,18 @@ func main() {
 		os.Exit(1)
 	}
 	printSuccess("保存成功!")
+
+	// 可选：配置 Agent Teams（exitOnDone=false，由 main 统一处理退出）
+	fmt.Println()
+	if styledConfirm("是否同时配置 Agent Teams 功能") {
+		configureAgentTeams(false)
+	}
+
+	// 可选：配置 VSCode 插件
+	fmt.Println()
+	if styledConfirm("是否同时配置 VSCode 插件") {
+		configureVSCode(cfg, false)
+	}
 
 	// 打印摘要
 	printSummary(cfg)
