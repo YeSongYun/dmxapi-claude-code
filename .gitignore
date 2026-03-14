@@ -5,3 +5,4 @@ dmxapi-claude-code-macos-amd64
 dmxapi-claude-code-macos-arm64
 dmxapi-claude-code.exe
 dmxapi-claude-code
+.worktrees/
