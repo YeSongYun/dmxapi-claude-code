@@ -812,7 +812,7 @@ appVersion = "1.4.5"
 
 替换为：
 ```go
-appVersion = "1.5.0"
+appVersion = "1.4.6"
 ```
 
 - [ ] **Step 2: 运行全部测试**
@@ -839,5 +839,5 @@ GOOS=windows GOARCH=amd64 go build -o /dev/null .
 
 ```bash
 git add dmxapi-claude-code.go
-git commit -m "chore: 版本号升级 v1.4.5 → v1.5.0"
+git commit -m "chore: 版本号升级 v1.4.5 → v1.4.6"
 ```
