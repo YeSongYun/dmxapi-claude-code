@@ -707,7 +707,7 @@ func vscodeSettingsPathFor(goos, homeDir, appData, wslWindowsHome string) string
 		return filepath.Join(wslWindowsHome, "AppData", "Roaming", "Code", "User", "settings.json")
 	case goos == "windows":
 		// Windows：需要保持反斜杠，用 \\ 连接
-		return appData + `\Code\User\settings.json`
+		return strings.Join([]string{appData, "Code", "User", "settings.json"}, `\`)
 	case goos == "darwin":
 		return filepath.Join(homeDir, "Library", "Application Support", "Code", "User", "settings.json")
 	default:
