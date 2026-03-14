@@ -1721,8 +1721,10 @@ func saveConfig(cfg Config) error {
 	}
 }
 
-// configureAgentTeams 配置实验性 Agent Teams 功能环境变量
-func configureAgentTeams() {
+// configureAgentTeams 配置实验性 Agent Teams 功能环境变量。
+// exitOnDone=true 时末尾显示"按回车键退出"（独立运行模式4时使用）；
+// 嵌入模式1后置步骤时传 false，由 main 统一处理退出。
+func configureAgentTeams(exitOnDone bool) {
 	printSectionHeader("配置实验性 Agent Teams 功能")
 	fmt.Println()
 
@@ -1794,8 +1796,10 @@ func configureAgentTeams() {
 			printTip("若需要 Windows 侧程序读取，请在 Windows 侧单独配置")
 		}
 	}
-	fmt.Println()
-	styledInput("按回车键退出")
+	if exitOnDone {
+		fmt.Println()
+		styledInput("按回车键退出")
+	}
 }
 
 // printSummary 打印配置摘要
@@ -2060,7 +2064,7 @@ func main() {
 		printInfo("禁用实验性请求头，解决 Claude Code 400 传入请求头错误问题")
 		fmt.Println()
 	} else if configMode == 4 {
-		configureAgentTeams()
+		configureAgentTeams(true)
 		return
 	} else {
 		// 仅配置模型模式
