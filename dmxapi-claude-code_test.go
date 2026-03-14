@@ -178,3 +178,53 @@ func TestVscodeSettingsPathFor(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildVSCodeEnvVars(t *testing.T) {
+	cfg := Config{
+		BaseURL:     "https://api.example.com",
+		AuthToken:   "sk-test-token",
+		Model:       "claude-sonnet-4-6-cc",
+		HaikuModel:  "claude-haiku-4-5-20251001-cc",
+		SonnetModel: "claude-sonnet-4-6-cc",
+		OpusModel:   "claude-opus-4-6-cc",
+	}
+
+	// 不含 Agent Teams
+	vars := buildVSCodeEnvVars(cfg, "")
+	if len(vars) != 7 {
+		t.Fatalf("expected 7 vars, got %d", len(vars))
+	}
+	found := false
+	for _, v := range vars {
+		if v["name"] == "ANTHROPIC_BASE_URL" && v["value"] == "https://api.example.com" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("ANTHROPIC_BASE_URL not found or wrong value")
+	}
+	found = false
+	for _, v := range vars {
+		if v["name"] == "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS" && v["value"] == "1" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS not found or wrong value")
+	}
+
+	// 含 Agent Teams
+	vars2 := buildVSCodeEnvVars(cfg, "1")
+	if len(vars2) != 8 {
+		t.Fatalf("expected 8 vars with agent teams, got %d", len(vars2))
+	}
+	found = false
+	for _, v := range vars2 {
+		if v["name"] == "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS" && v["value"] == "1" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS not found")
+	}
+}

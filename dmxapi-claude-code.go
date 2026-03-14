@@ -716,6 +716,27 @@ func vscodeSettingsPathFor(goos, homeDir, appData, wslWindowsHome string) string
 	}
 }
 
+// buildVSCodeEnvVars 根据 Config 构建 claude-code.environmentVariables 数组（纯函数）。
+// agentTeamsVal 为空时不写入 CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS。
+func buildVSCodeEnvVars(cfg Config, agentTeamsVal string) []map[string]string {
+	entries := []map[string]string{
+		{"name": envBaseURL, "value": cfg.BaseURL},
+		{"name": envAuthToken, "value": cfg.AuthToken},
+		{"name": envModel, "value": cfg.Model},
+		{"name": envHaikuModel, "value": cfg.HaikuModel},
+		{"name": envSonnetModel, "value": cfg.SonnetModel},
+		{"name": envOpusModel, "value": cfg.OpusModel},
+		{"name": envDisableExperimentalBetas, "value": fixedDisableExperimentalBetas},
+	}
+	if agentTeamsVal != "" {
+		entries = append(entries, map[string]string{
+			"name":  envAgentTeams,
+			"value": agentTeamsVal,
+		})
+	}
+	return entries
+}
+
 // removeEnvVarUnix 从 Unix shell 配置文件中删除指定环境变量（幂等）
 func removeEnvVarUnix(key string) error {
 	homeDir, err := os.UserHomeDir()
