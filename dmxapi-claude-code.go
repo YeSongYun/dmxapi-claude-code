@@ -765,7 +765,7 @@ func winPathToWSL(winPath string) string {
 // 优先调用 cmd.exe；失败时回退到扫描 /mnt/c/Users/ 中的第一个非系统用户目录。
 func getWindowsHomeFromWSL() string {
 	// 方法1：调用 cmd.exe /c echo %USERPROFILE%
-	cmd := exec.Command("cmd.exe", "/c", "echo", "%USERPROFILE%")
+	cmd := exec.Command("cmd.exe", "/c", "echo %USERPROFILE%")
 	if out, err := cmd.Output(); err == nil {
 		if p := winPathToWSL(string(out)); p != "" {
 			return p
