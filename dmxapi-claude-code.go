@@ -2185,6 +2185,9 @@ func main() {
 	// 加载现有配置
 	cfg := loadExistingConfig()
 
+	// 提前收集附加配置意向（模式1时由用户选择，其他模式默认 false）
+	var wantTeams, wantVSCode bool
+
 	// 根据配置模式执行不同流程
 	if configMode == 1 {
 		// 从头配置模式
@@ -2236,6 +2239,11 @@ func main() {
 			break
 		}
 		printSuccess("API 连接验证成功!")
+		// 提前询问附加配置意向
+		fmt.Println()
+		wantTeams = styledConfirm("是否同时配置 Agent Teams 功能")
+		fmt.Println()
+		wantVSCode = styledConfirm("是否同时配置 VSCode 插件")
 	} else if configMode == 3 {
 		// 解决 400 报错模式：无需任何输入，直接跳到保存
 		printSectionHeader("修复 Claude Code 400 请求头错误")
@@ -2276,15 +2284,13 @@ func main() {
 	}
 	printSuccess("保存成功!")
 
-	// 可选：配置 Agent Teams（exitOnDone=false，由 main 统一处理退出）
-	fmt.Println()
-	if styledConfirm("是否同时配置 Agent Teams 功能") {
+	// 执行附加配置（仅 configMode==1 时 wantTeams/wantVSCode 可能为 true）
+	if wantTeams {
+		fmt.Println()
 		configureAgentTeams(false)
 	}
-
-	// 可选：配置 VSCode 插件
-	fmt.Println()
-	if styledConfirm("是否同时配置 VSCode 插件") {
+	if wantVSCode {
+		fmt.Println()
 		configureVSCode(cfg, false)
 	}
 
