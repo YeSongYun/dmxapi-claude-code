@@ -79,6 +79,25 @@ jobs:
 
             ---
 
+            ### ⚡ 快速安装（推荐）
+
+            **Linux / macOS**
+            ```bash
+            curl -fsSL https://cnb.cool/dmxapi/dmxapi_claude_code/-/raw/main/install.sh | bash
+            ```
+
+            **Windows PowerShell**
+            ```powershell
+            iwr -useb https://cnb.cool/dmxapi/dmxapi_claude_code/-/raw/main/install.ps1 | iex
+            ```
+
+            **Windows CMD**
+            ```cmd
+            curl -fsSL https://cnb.cool/dmxapi/dmxapi_claude_code/-/raw/main/install.cmd -o %TEMP%\install.cmd && %TEMP%\install.cmd
+            ```
+
+            ---
+
             ### 🛠️ 安装说明
 
             #### Windows x64
