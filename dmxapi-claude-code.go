@@ -696,6 +696,26 @@ func setEnvVarsUnix(vars map[string]string) error {
 	return nil
 }
 
+// ==================== VSCode 插件配置 ====================
+
+// vscodeSettingsPathFor 根据平台参数返回 VSCode settings.json 的绝对路径（纯函数，便于测试）。
+// wslWindowsHome 非空时表示 WSL 环境，使用 Windows 侧路径。
+func vscodeSettingsPathFor(goos, homeDir, appData, wslWindowsHome string) string {
+	switch {
+	case wslWindowsHome != "":
+		// WSL：写入 Windows 侧 AppData（使用 filepath.Join 处理 Unix 风格路径）
+		return filepath.Join(wslWindowsHome, "AppData", "Roaming", "Code", "User", "settings.json")
+	case goos == "windows":
+		// Windows：需要保持反斜杠，用 \\ 连接
+		return appData + `\Code\User\settings.json`
+	case goos == "darwin":
+		return filepath.Join(homeDir, "Library", "Application Support", "Code", "User", "settings.json")
+	default:
+		// linux 及其他
+		return filepath.Join(homeDir, ".config", "Code", "User", "settings.json")
+	}
+}
+
 // removeEnvVarUnix 从 Unix shell 配置文件中删除指定环境变量（幂等）
 func removeEnvVarUnix(key string) error {
 	homeDir, err := os.UserHomeDir()

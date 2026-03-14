@@ -139,3 +139,42 @@ func TestDetectShellProfile(t *testing.T) {
 		}
 	}
 }
+
+func TestVscodeSettingsPathFor(t *testing.T) {
+	cases := []struct {
+		goos           string
+		homeDir        string
+		appData        string
+		wslWindowsHome string
+		want           string
+	}{
+		{
+			goos:    "darwin",
+			homeDir: "/Users/alice",
+			want:    "/Users/alice/Library/Application Support/Code/User/settings.json",
+		},
+		{
+			goos:    "linux",
+			homeDir: "/home/bob",
+			want:    "/home/bob/.config/Code/User/settings.json",
+		},
+		{
+			goos:    "windows",
+			appData: `C:\Users\carol\AppData\Roaming`,
+			want:    `C:\Users\carol\AppData\Roaming\Code\User\settings.json`,
+		},
+		{
+			goos:           "linux",
+			homeDir:        "/home/dave",
+			wslWindowsHome: `/mnt/c/Users/dave`,
+			want:           `/mnt/c/Users/dave/AppData/Roaming/Code/User/settings.json`,
+		},
+	}
+	for _, c := range cases {
+		got := vscodeSettingsPathFor(c.goos, c.homeDir, c.appData, c.wslWindowsHome)
+		if got != c.want {
+			t.Errorf("vscodeSettingsPathFor(%q,%q,%q,%q)\ngot  %q\nwant %q",
+				c.goos, c.homeDir, c.appData, c.wslWindowsHome, got, c.want)
+		}
+	}
+}
