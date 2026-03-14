@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -227,4 +228,46 @@ func TestBuildVSCodeEnvVars(t *testing.T) {
 	if !found {
 		t.Error("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS not found")
 	}
+}
+
+func TestMergeVSCodeSettings(t *testing.T) {
+	envVars := []map[string]string{
+		{"name": "ANTHROPIC_BASE_URL", "value": "https://api.example.com"},
+	}
+
+	t.Run("空文件写入", func(t *testing.T) {
+		out, err := mergeVSCodeSettings([]byte(`{}`), envVars)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var result map[string]interface{}
+		if err := json.Unmarshal(out, &result); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := result["claude-code.environmentVariables"]; !ok {
+			t.Error("claude-code.environmentVariables key missing")
+		}
+	})
+
+	t.Run("保留既有键", func(t *testing.T) {
+		existing := []byte(`{"editor.fontSize": 14, "claude-code.environmentVariables": []}`)
+		out, err := mergeVSCodeSettings(existing, envVars)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var result map[string]interface{}
+		if err := json.Unmarshal(out, &result); err != nil {
+			t.Fatal(err)
+		}
+		if result["editor.fontSize"] != float64(14) {
+			t.Error("editor.fontSize should be preserved")
+		}
+	})
+
+	t.Run("JSON 无效返回错误", func(t *testing.T) {
+		_, err := mergeVSCodeSettings([]byte(`not json`), envVars)
+		if err == nil {
+			t.Error("expected error for invalid JSON")
+		}
+	})
 }

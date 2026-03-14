@@ -737,6 +737,18 @@ func buildVSCodeEnvVars(cfg Config, agentTeamsVal string) []map[string]string {
 	return entries
 }
 
+// mergeVSCodeSettings 将 envVars 写入现有 JSON 的 claude-code.environmentVariables 键，
+// 保留所有其他键。existingJSON 必须是合法 JSON 对象。
+// 返回格式化后的 JSON 字节（2空格缩进）。
+func mergeVSCodeSettings(existingJSON []byte, envVars []map[string]string) ([]byte, error) {
+	var settings map[string]interface{}
+	if err := json.Unmarshal(existingJSON, &settings); err != nil {
+		return nil, fmt.Errorf("解析 settings.json 失败: %v", err)
+	}
+	settings["claude-code.environmentVariables"] = envVars
+	return json.MarshalIndent(settings, "", "  ")
+}
+
 // removeEnvVarUnix 从 Unix shell 配置文件中删除指定环境变量（幂等）
 func removeEnvVarUnix(key string) error {
 	homeDir, err := os.UserHomeDir()
