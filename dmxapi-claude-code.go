@@ -749,6 +749,114 @@ func mergeVSCodeSettings(existingJSON []byte, envVars []map[string]string) ([]by
 	return json.MarshalIndent(settings, "", "  ")
 }
 
+// winPathToWSL 将 Windows 路径（如 C:\Users\alice）转换为 WSL 挂载路径（/mnt/c/Users/alice）。
+// 注意：不使用 filepath.ToSlash，因为 filepath.ToSlash 在 Linux/WSL 宿主上不转换反斜杠。
+func winPathToWSL(winPath string) string {
+	winPath = strings.TrimSpace(winPath)
+	if len(winPath) < 3 || winPath[1] != ':' {
+		return ""
+	}
+	drive := strings.ToLower(string(winPath[0]))
+	rest := strings.ReplaceAll(winPath[2:], "\\", "/")
+	return "/mnt/" + drive + rest
+}
+
+// getWindowsHomeFromWSL 在 WSL 环境中获取 Windows 用户目录对应的 WSL 路径。
+// 优先调用 cmd.exe；失败时回退到扫描 /mnt/c/Users/ 中的第一个非系统用户目录。
+func getWindowsHomeFromWSL() string {
+	// 方法1：调用 cmd.exe /c echo %USERPROFILE%
+	cmd := exec.Command("cmd.exe", "/c", "echo", "%USERPROFILE%")
+	if out, err := cmd.Output(); err == nil {
+		if p := winPathToWSL(string(out)); p != "" {
+			return p
+		}
+	}
+
+	// 方法2：扫描 /mnt/c/Users/ 取第一个非系统目录
+	usersDir := "/mnt/c/Users"
+	entries, err := os.ReadDir(usersDir)
+	if err != nil {
+		return ""
+	}
+	systemDirs := map[string]bool{
+		"Default": true, "Public": true, "All Users": true,
+		"Default User": true, "desktop.ini": true,
+	}
+	for _, e := range entries {
+		if e.IsDir() && !systemDirs[e.Name()] {
+			return filepath.Join(usersDir, e.Name())
+		}
+	}
+	return ""
+}
+
+// getVSCodeSettingsPath 返回当前系统 VSCode settings.json 的绝对路径。
+func getVSCodeSettingsPath() (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		homeDir = ""
+	}
+	appData := os.Getenv("APPDATA")
+	if appData == "" && runtime.GOOS == "windows" {
+		// 回退：用 homeDir 拼出 AppData\Roaming
+		appData = filepath.Join(homeDir, "AppData", "Roaming")
+	}
+
+	wslWindowsHome := ""
+	if isWSL() {
+		wslWindowsHome = getWindowsHomeFromWSL()
+	}
+
+	path := vscodeSettingsPathFor(runtime.GOOS, homeDir, appData, wslWindowsHome)
+	if path == "" {
+		return "", fmt.Errorf("无法确定 VSCode settings.json 路径")
+	}
+	return path, nil
+}
+
+// saveVSCodeConfig 将 cfg 写入 VSCode settings.json 的 claude-code.environmentVariables。
+// 若文件不存在则自动创建；若 JSON 解析失败则询问用户是否备份重建。
+func saveVSCodeConfig(cfg Config) error {
+	settingsPath, err := getVSCodeSettingsPath()
+	if err != nil {
+		return err
+	}
+
+	// 确保目录存在
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0755); err != nil {
+		return fmt.Errorf("创建目录失败: %v", err)
+	}
+
+	// 读取现有内容（不存在则用空对象）
+	existingJSON := []byte("{}")
+	if data, err := os.ReadFile(settingsPath); err == nil {
+		existingJSON = data
+	}
+
+	agentTeamsVal := getEnvVar(envAgentTeams)
+	envVars := buildVSCodeEnvVars(cfg, agentTeamsVal)
+
+	merged, err := mergeVSCodeSettings(existingJSON, envVars)
+	if err != nil {
+		// JSON 解析失败：询问是否备份重建
+		printError(fmt.Sprintf("settings.json 解析失败: %v", err))
+		if !styledConfirm("是否备份原文件并重新创建") {
+			return fmt.Errorf("用户取消：保留原文件，跳过写入")
+		}
+		backupPath := settingsPath + ".bak"
+		if berr := os.Rename(settingsPath, backupPath); berr != nil {
+			return fmt.Errorf("备份失败: %v", berr)
+		}
+		printInfo(fmt.Sprintf("原文件已备份至: %s", backupPath))
+		merged, err = mergeVSCodeSettings([]byte("{}"), envVars)
+		if err != nil {
+			return err
+		}
+	}
+
+	return os.WriteFile(settingsPath, merged, 0644)
+}
+
 // removeEnvVarUnix 从 Unix shell 配置文件中删除指定环境变量（幂等）
 func removeEnvVarUnix(key string) error {
 	homeDir, err := os.UserHomeDir()
