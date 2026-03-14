@@ -10,6 +10,32 @@
 - 支持 Windows / Linux / macOS
 - 环境变量自动持久化
 
+## ⚡ 快速安装（推荐）
+
+无需手动下载，一行命令完成安装并自动启动配置。
+
+### Linux / macOS
+
+```bash
+curl -fsSL https://cnb.cool/dmxapi/dmxapi_claude_code/-/raw/main/install.sh | bash
+```
+
+### Windows PowerShell
+
+```powershell
+iwr -useb https://cnb.cool/dmxapi/dmxapi_claude_code/-/raw/main/install.ps1 | iex
+```
+
+### Windows CMD
+
+```cmd
+curl -fsSL https://cnb.cool/dmxapi/dmxapi_claude_code/-/raw/main/install.cmd -o %TEMP%\install.cmd && %TEMP%\install.cmd
+```
+
+> **Windows 说明**：CMD 方案需要 Windows 10 版本 1803 或更高（内置 curl）。
+
+---
+
 ## 下载
 
 > **说明**：`[版本]` 替换为实际下载的版本号，如 `v1.3.3`
