@@ -857,6 +857,75 @@ func saveVSCodeConfig(cfg Config) error {
 	return os.WriteFile(settingsPath, merged, 0644)
 }
 
+// configureVSCode 模式5交互流程：展示将写入的配置，用户确认后写入 VSCode settings.json。
+// exitOnDone=true 时末尾显示"按回车键退出"（独立运行模式5时使用）；
+// 嵌入模式1后置步骤时传 false，由 main 统一处理退出。
+func configureVSCode(cfg Config, exitOnDone bool) {
+	printSectionHeader("配置 VSCode 插件")
+	fmt.Println()
+
+	settingsPath, err := getVSCodeSettingsPath()
+	if err != nil {
+		printError(fmt.Sprintf("无法确定 settings.json 路径: %v", err))
+		if exitOnDone {
+			fmt.Println()
+			styledInput("按回车键退出")
+		}
+		return
+	}
+	printInfo(fmt.Sprintf("目标文件: %s", settingsPath))
+	fmt.Println()
+
+	// 展示将写入的配置
+	agentTeamsVal := getEnvVar(envAgentTeams)
+	envVars := buildVSCodeEnvVars(cfg, agentTeamsVal)
+
+	if cfg.BaseURL == "" || cfg.AuthToken == "" {
+		printWarning("未检测到 BaseURL 或 Token 配置，建议先运行「从头配置」")
+		fmt.Println()
+	}
+
+	printInfo("将写入以下环境变量:")
+	for _, v := range envVars {
+		val := v["value"]
+		if v["name"] == envAuthToken && len(val) > 8 {
+			val = maskToken(val)
+		}
+		fmt.Printf("  %-45s = %s\n", v["name"], val)
+	}
+	fmt.Println()
+
+	if !styledConfirm("确认写入 VSCode settings.json") {
+		printInfo("已取消")
+		if exitOnDone {
+			fmt.Println()
+			styledInput("按回车键退出")
+		}
+		return
+	}
+
+	fmt.Println()
+	err = runWithSpinner("正在写入 VSCode 配置...", func() error {
+		return saveVSCodeConfig(cfg)
+	})
+	if err != nil {
+		printError(fmt.Sprintf("写入失败: %v", err))
+	} else {
+		printSuccess("VSCode 配置写入成功!")
+		printInfo(fmt.Sprintf("文件路径: %s", settingsPath))
+		if isWSL() {
+			printTip("注意：已写入 Windows 侧 VSCode 配置，重启 VSCode 后生效")
+		} else {
+			printTip("重启 VSCode 后配置生效")
+		}
+	}
+
+	if exitOnDone {
+		fmt.Println()
+		styledInput("按回车键退出")
+	}
+}
+
 // removeEnvVarUnix 从 Unix shell 配置文件中删除指定环境变量（幂等）
 func removeEnvVarUnix(key string) error {
 	homeDir, err := os.UserHomeDir()
