@@ -41,6 +41,9 @@ const (
 	envDisableExperimentalBetas = "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"
 	envAgentTeams               = "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"
 
+	// VSCode settings.json 中写入配置所用的键名
+	vscodeEnvKey = "claude-code.environmentVariables"
+
 	// 默认模型值
 	defaultModel       = "claude-sonnet-4-6-cc"
 	defaultHaikuModel  = "claude-haiku-4-5-20251001-cc"
@@ -745,7 +748,7 @@ func mergeVSCodeSettings(existingJSON []byte, envVars []map[string]string) ([]by
 	if err := json.Unmarshal(existingJSON, &settings); err != nil {
 		return nil, fmt.Errorf("解析 settings.json 失败: %v", err)
 	}
-	settings["claude-code.environmentVariables"] = envVars
+	settings[vscodeEnvKey] = envVars
 	return json.MarshalIndent(settings, "", "  ")
 }
 
@@ -1998,6 +2001,22 @@ func printSummary(cfg Config) {
 			valueColor, value, colorReset)
 	}
 
+	// Agent Teams：读取当前进程环境变量（配置后 os.Setenv 已更新）
+	agentTeamsDisplay, agentTeamsColor := "未启用", colorWhite
+	if getEnvVar(envAgentTeams) == "1" {
+		agentTeamsDisplay, agentTeamsColor = "已启用", colorBrightGreen
+	}
+
+	// VSCode Plugin：解析 settings.json，检测目标键是否存在
+	vscodeDisplay, vscodeColor := "未配置", colorWhite
+	if path, err := getVSCodeSettingsPath(); err == nil {
+		if data, err := os.ReadFile(path); err == nil {
+			if isVSCodeConfigured(data) {
+				vscodeDisplay, vscodeColor = "已配置", colorBrightGreen
+			}
+		}
+	}
+
 	lines := []string{
 		makeRow("Base URL", cfg.BaseURL, colorBrightGreen),
 		makeRow("Auth Token", maskToken(cfg.AuthToken), colorBrightYellow),
@@ -2006,6 +2025,8 @@ func printSummary(cfg Config) {
 		makeRow("Sonnet Model", cfg.SonnetModel, colorCyan),
 		makeRow("Opus Model", cfg.OpusModel, colorCyan),
 		makeRow("Disable Betas", fixedDisableExperimentalBetas, colorMagenta),
+		makeRow("Agent Teams", agentTeamsDisplay, agentTeamsColor),
+		makeRow("VSCode Plugin", vscodeDisplay, vscodeColor),
 	}
 	printBox("配置摘要", colorBrightWhite, lines)
 
@@ -2033,6 +2054,17 @@ func printSummary(cfg Config) {
 			printTip("若需要 Windows 侧程序读取，请在 Windows 侧单独配置")
 		}
 	}
+}
+
+// isVSCodeConfigured 检测 JSON 内容是否含 claude-code.environmentVariables 键。
+// 用于判断 VSCode settings.json 是否已由本工具写入配置。
+func isVSCodeConfigured(data []byte) bool {
+	var settings map[string]interface{}
+	if err := json.Unmarshal(data, &settings); err != nil {
+		return false
+	}
+	_, ok := settings[vscodeEnvKey]
+	return ok
 }
 
 // maskToken 遮盖 Token
