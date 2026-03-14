@@ -284,7 +284,16 @@ func TestMergeVSCodeSettings(t *testing.T) {
 }
 ```
 
-注意：需要在测试文件顶部 import 中加入 `"encoding/json"`（如还未导入）。检查 `dmxapi-claude-code_test.go` 顶部的 import，若无则追加：
+注意：需要在测试文件 import 块中追加 `"encoding/json"`。找到现有 import 块（文件顶部）：
+
+```go
+import (
+	"strings"
+	"testing"
+)
+```
+
+在 `"strings"` 行之前插入一行，改为：
 
 ```go
 import (
@@ -293,6 +302,8 @@ import (
 	"testing"
 )
 ```
+
+若 import 块已包含 `"encoding/json"` 则跳过此步。
 
 - [ ] **Step 2: 运行测试确认失败**
 
@@ -370,19 +381,25 @@ func configureAgentTeams(exitOnDone bool) {
 
 - [ ] **Step 2: 修改函数末尾的退出提示**
 
-找到（约第1744行，`configureAgentTeams` 函数末尾）：
+找到（约第1738行，`configureAgentTeams` 函数末尾，`isWSL()` 提示块之后）：
 ```go
+	}
 	fmt.Println()
 	styledInput("按回车键退出")
 }
+
+// printSummary 打印配置摘要
 ```
 替换为：
 ```go
+	}
 	if exitOnDone {
 		fmt.Println()
 		styledInput("按回车键退出")
 	}
 }
+
+// printSummary 打印配置摘要
 ```
 
 - [ ] **Step 3: 更新模式4的独立调用**
