@@ -2245,7 +2245,6 @@ func main() {
 		configureAgentTeams(true)
 		return
 	} else if configMode == 5 {
-		cfg := loadExistingConfig()
 		configureVSCode(cfg, true)
 		return
 	} else {
