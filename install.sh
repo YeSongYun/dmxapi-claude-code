@@ -43,6 +43,6 @@ if [ "$OS_NAME" = "macos" ]; then
 fi
 
 echo "正在启动配置工具..."
-"$TMP_FILE"
+"$TMP_FILE" </dev/tty
 
 rm -f "$TMP_FILE"
