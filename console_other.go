@@ -3,6 +3,7 @@
 package main
 
 import (
+	"runtime"
 	"syscall"
 
 	"golang.org/x/sys/unix"
@@ -22,4 +23,22 @@ func stdinDataReady(timeoutMs int) bool {
 	fds := []unix.PollFd{{Fd: int32(syscall.Stdin), Events: unix.POLLIN}}
 	n, err := unix.Poll(fds, timeoutMs)
 	return err == nil && n > 0
+}
+
+// stdinBytesAvailable 使用 FIONREAD ioctl 查询 stdin 内核缓冲区中立即可读的字节数。
+// 与 poll 超时方案相比，此方法无等待时间，且在 curl|bash（</dev/tty）场景下
+// 不受文件描述符打开方式影响，更加可靠。
+// FIONREAD 的 ioctl 编号在 macOS 和 Linux 上不同，通过 runtime.GOOS 区分。
+func stdinBytesAvailable() int {
+	var req uint
+	if runtime.GOOS == "darwin" {
+		req = 0x4004667F // macOS FIONREAD（<sys/filio.h>）
+	} else {
+		req = 0x541B // Linux FIONREAD/TIOCINQ（amd64/arm64）
+	}
+	n, err := unix.IoctlGetInt(int(syscall.Stdin), req)
+	if err != nil {
+		return 0
+	}
+	return n
 }

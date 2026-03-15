@@ -102,6 +102,11 @@ func stdinDataReady(timeoutMs int) bool {
 	return true
 }
 
+// stdinBytesAvailable 在 Windows 上是编译占位，Windows 使用 readConsoleKey 处理键盘输入
+func stdinBytesAvailable() int {
+	return 0
+}
+
 // initWindowsConsole 初始化 Windows 控制台：设置 UTF-8 代码页并启用 ANSI/VT 颜色处理
 func initWindowsConsole() {
 	// 1. 设置输入/输出代码页为 UTF-8 (65001)，解决中文乱码

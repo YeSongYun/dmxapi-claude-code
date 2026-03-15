@@ -1365,7 +1365,7 @@ func readRawKey() KeyType {
 		}
 		os.Exit(0)
 	case 0x1B: // ESC 序列（Linux/macOS/Windows Terminal）
-		if !stdinDataReady(100) {
+		if stdinBytesAvailable() == 0 {
 			return KeyEsc // 单独按下 ESC 键，无后续字节
 		}
 		rest := make([]byte, 2)
