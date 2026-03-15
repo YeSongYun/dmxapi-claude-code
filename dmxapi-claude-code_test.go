@@ -244,13 +244,13 @@ func TestMergeVSCodeSettings(t *testing.T) {
 		if err := json.Unmarshal(out, &result); err != nil {
 			t.Fatal(err)
 		}
-		if _, ok := result["claude-code.environmentVariables"]; !ok {
-			t.Error("claude-code.environmentVariables key missing")
+		if _, ok := result["claudeCode.environmentVariables"]; !ok {
+			t.Error("claudeCode.environmentVariables key missing")
 		}
 	})
 
 	t.Run("保留既有键", func(t *testing.T) {
-		existing := []byte(`{"editor.fontSize": 14, "claude-code.environmentVariables": []}`)
+		existing := []byte(`{"editor.fontSize": 14, "claudeCode.environmentVariables": []}`)
 		out, err := mergeVSCodeSettings(existing, envVars)
 		if err != nil {
 			t.Fatal(err)
@@ -270,4 +270,29 @@ func TestMergeVSCodeSettings(t *testing.T) {
 			t.Error("expected error for invalid JSON")
 		}
 	})
+}
+
+func TestIsVSCodeConfigured(t *testing.T) {
+	cases := []struct {
+		name  string
+		input []byte
+		want  bool
+	}{
+		{"含新键", []byte(`{"claudeCode.environmentVariables": []}`), true},
+		{"含旧键（向后兼容）", []byte(`{"claude-code.environmentVariables": []}`), true},
+		{"新旧键共存", []byte(`{"claudeCode.environmentVariables": [], "claude-code.environmentVariables": []}`), true},
+		{"旧键值为空数组", []byte(`{"claude-code.environmentVariables": []}`), true},
+		{"含其他键", []byte(`{"editor.fontSize": 14}`), false},
+		{"空对象", []byte(`{}`), false},
+		{"无效 JSON", []byte(`not json`), false},
+		{"空字节", []byte(``), false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := isVSCodeConfigured(c.input)
+			if got != c.want {
+				t.Errorf("isVSCodeConfigured(%q) = %v, want %v", c.input, got, c.want)
+			}
+		})
+	}
 }

@@ -41,8 +41,10 @@ const (
 	envDisableExperimentalBetas = "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"
 	envAgentTeams               = "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"
 
-	// VSCode settings.json 中写入配置所用的键名
-	vscodeEnvKey = "claude-code.environmentVariables"
+	// VSCode settings.json 中写入配置所用的键名（claudeCode 为扩展 package.json 中定义的配置前缀）
+	vscodeEnvKey    = "claudeCode.environmentVariables"
+	// vscodeEnvKeyOld 为旧版工具使用的错误键名，仅用于向后兼容检测，不再写入
+	vscodeEnvKeyOld = "claude-code.environmentVariables"
 
 	// 默认模型值
 	defaultModel       = "claude-sonnet-4-6-cc"
@@ -719,7 +721,7 @@ func vscodeSettingsPathFor(goos, homeDir, appData, wslWindowsHome string) string
 	}
 }
 
-// buildVSCodeEnvVars 根据 Config 构建 claude-code.environmentVariables 数组（纯函数）。
+// buildVSCodeEnvVars 根据 Config 构建 claudeCode.environmentVariables 数组（纯函数）。
 // agentTeamsVal 为空时不写入 CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS。
 func buildVSCodeEnvVars(cfg Config, agentTeamsVal string) []map[string]string {
 	entries := []map[string]string{
@@ -740,7 +742,7 @@ func buildVSCodeEnvVars(cfg Config, agentTeamsVal string) []map[string]string {
 	return entries
 }
 
-// mergeVSCodeSettings 将 envVars 写入现有 JSON 的 claude-code.environmentVariables 键，
+// mergeVSCodeSettings 将 envVars 写入现有 JSON 的 claudeCode.environmentVariables 键，
 // 保留所有其他键。existingJSON 必须是合法 JSON 对象。
 // 返回格式化后的 JSON 字节（2空格缩进）。
 func mergeVSCodeSettings(existingJSON []byte, envVars []map[string]string) ([]byte, error) {
@@ -817,7 +819,7 @@ func getVSCodeSettingsPath() (string, error) {
 	return path, nil
 }
 
-// saveVSCodeConfig 将 cfg 写入 VSCode settings.json 的 claude-code.environmentVariables。
+// saveVSCodeConfig 将 cfg 写入 VSCode settings.json 的 claudeCode.environmentVariables。
 // 若文件不存在则自动创建；若 JSON 解析失败则询问用户是否备份重建。
 func saveVSCodeConfig(cfg Config) error {
 	settingsPath, err := getVSCodeSettingsPath()
@@ -2056,15 +2058,17 @@ func printSummary(cfg Config) {
 	}
 }
 
-// isVSCodeConfigured 检测 JSON 内容是否含 claude-code.environmentVariables 键。
+// isVSCodeConfigured 检测 JSON 内容是否含 claudeCode.environmentVariables 键（新键）
+// 或旧版工具写入的 claude-code.environmentVariables 键（向后兼容）。
 // 用于判断 VSCode settings.json 是否已由本工具写入配置。
 func isVSCodeConfigured(data []byte) bool {
 	var settings map[string]interface{}
 	if err := json.Unmarshal(data, &settings); err != nil {
 		return false
 	}
-	_, ok := settings[vscodeEnvKey]
-	return ok
+	_, hasNew := settings[vscodeEnvKey]
+	_, hasOld := settings[vscodeEnvKeyOld]
+	return hasNew || hasOld
 }
 
 // maskToken 遮盖 Token
