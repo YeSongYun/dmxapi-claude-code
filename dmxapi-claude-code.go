@@ -95,7 +95,7 @@ const (
 	styleBold = "\033[1m"
 	styleDim  = "\033[2m"
 	// 版本号
-	appVersion = "1.4.7"
+	appVersion = "1.4.8"
 	// 统一盒子内容宽度（不含左右边框字符）
 	boxWidth = 60
 )
