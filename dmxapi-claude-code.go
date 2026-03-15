@@ -2236,11 +2236,11 @@ func main() {
 		// 配置 Auth Token
 		cfg.AuthToken = getNewAuthToken(cfg.AuthToken, hostname)
 
+		// 配置模型（在 API 验证前，使验证所用模型与用户选择一致）
+		fmt.Println()
+		configureModels(&cfg)
+
 		// 验证 API 连接（循环直到成功）
-		// 若用户首次配置尚未选择模型，使用默认模型进行验证
-		if cfg.Model == "" {
-			cfg.Model = defaultModel
-		}
 		fmt.Println()
 		for {
 			if err := validateAPIConnection(cfg.BaseURL, cfg.AuthToken, cfg.Model); err != nil {
@@ -2304,8 +2304,8 @@ func main() {
 		fmt.Println()
 	}
 
-	// 配置模型（模式 3 直接跳过）
-	if configMode != 3 {
+	// 配置模型（仅 mode 2；mode 1 已在上方提前配置）
+	if configMode == 2 {
 		configureModels(&cfg)
 	}
 
