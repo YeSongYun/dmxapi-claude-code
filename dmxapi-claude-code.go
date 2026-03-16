@@ -73,6 +73,18 @@ var presetModels = []string{
 	"claude-haiku-4-5-20251001",
 }
 
+// allEnvVarKeys 本工具管理的所有环境变量名，清除时使用
+var allEnvVarKeys = []string{
+	envBaseURL,
+	envAuthToken,
+	envModel,
+	envHaikuModel,
+	envSonnetModel,
+	envOpusModel,
+	envDisableExperimentalBetas,
+	envAgentTeams,
+}
+
 // 颜色代码
 const (
 	colorReset  = "\033[0m"
@@ -111,6 +123,14 @@ type Config struct {
 	HaikuModel  string
 	SonnetModel string
 	OpusModel   string
+}
+
+// clearResult 记录单个位置的清除结果
+type clearResult struct {
+	Location string // 位置描述，如 "~/.zshrc"
+	Status   string // "success" | "skipped" | "failed"
+	Message  string // 详细信息
+	Err      error  // 错误信息（如有）
 }
 
 // ==================== 工具函数 ====================
