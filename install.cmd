@@ -3,25 +3,31 @@ setlocal
 
 set VERSION=v1.5.0
 
-rem 检测架构
-if /i not "%PROCESSOR_ARCHITECTURE%"=="AMD64" (
-    echo 当前仅支持 x64 架构，检测到：%PROCESSOR_ARCHITECTURE%
-    exit /b 1
-)
+rem Detect architecture
+set ARCH=%PROCESSOR_ARCHITECTURE%
+if /i "%ARCH%"=="AMD64" goto :arch_ok
+if /i "%ARCH%"=="ARM64" goto :arch_ok
+echo Unsupported architecture: %ARCH%
+exit /b 1
 
+:arch_ok
+rem ARM64 Windows runs AMD64 binaries via x64 emulation layer
 set FILENAME=dmxapi-claude-code-%VERSION%-windows-amd64.exe
 set URL=https://cnb.cool/dmxapi/dmxapi_claude_code/-/releases/download/%VERSION%/%FILENAME%
 set TMP_FILE=%TEMP%\%FILENAME%
 
-echo 正在下载 %FILENAME%...
+echo Downloading %FILENAME%...
 curl -fsSL "%URL%" -o "%TMP_FILE%"
-if errorlevel 1 (
-    echo 下载失败，请检查网络连接或手动下载：%URL%
-    exit /b 1
-)
+if errorlevel 1 goto :download_failed
 
-echo 正在启动配置工具...
+echo Starting configuration tool...
 "%TMP_FILE%"
 
 del /f "%TMP_FILE%" 2>nul
 endlocal
+goto :eof
+
+:download_failed
+echo Download failed. Please check your network or download manually:
+echo %URL%
+exit /b 1
