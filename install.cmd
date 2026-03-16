@@ -1,7 +1,7 @@
 @echo off
 setlocal
 
-set VERSION=v1.4.9
+set VERSION=v1.5.0
 
 rem 检测架构
 if /i not "%PROCESSOR_ARCHITECTURE%"=="AMD64" (
