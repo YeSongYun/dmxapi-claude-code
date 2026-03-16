@@ -226,13 +226,6 @@ func visibleLength(s string) int {
 
 // printLogo 打印 ASCII Art Logo
 func printLogo() {
-	if runtime.GOOS == "windows" {
-		fmt.Println()
-		fmt.Println(colorCyan + styleBold + "  === DMXAPI ===" + colorReset)
-		fmt.Println(styleDim + "  Claude Code CLI 配置工具" + colorReset)
-		fmt.Printf("  %s%s/%s%s\n\n", colorMagenta, runtime.GOOS, runtime.GOARCH, colorReset)
-		return
-	}
 	logo := []string{
 		`██████╗ ███╗   ███╗██╗  ██╗ █████╗ ██████╗ ██╗`,
 		`██╔══██╗████╗ ████║╚██╗██╔╝██╔══██╗██╔══██╗██║`,
