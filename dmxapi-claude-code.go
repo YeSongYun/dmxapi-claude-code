@@ -1811,6 +1811,7 @@ func runL1Menu(cfg *Config) {
 			linesPrinted = 0
 		case KeyEsc:
 			restore()
+			clearMenuLines(linesPrinted)
 			return
 		}
 	}

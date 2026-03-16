@@ -1,5 +1,9 @@
 $VERSION = "v1.4.9"
 
+# 设置控制台输出为 UTF-8，确保中文正常显示（在 Go exe 启动前生效）
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [System.Text.Encoding]::UTF8
+
 # 检测架构
 $arch = $env:PROCESSOR_ARCHITECTURE
 if ($arch -ne "AMD64" -and $arch -ne "ARM64") {
