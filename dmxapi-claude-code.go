@@ -1433,7 +1433,7 @@ func getNewAuthToken(existing, hostname string) string {
 }
 
 // selectConfigMode 选择配置模式
-// 返回值: 1 = 从头配置, 2 = 仅配置模型, 3 = 解决 400 报错, 4 = 配置实验性功能, 5 = 配置 VSCode 插件
+// 返回值: 1 = 从头配置, 2 = 仅配置模型, 3 = 解决 400 报错, 4 = 配置实验性功能, 5 = 配置 VSCode 插件, 6 = 清除所有配置
 func selectConfigMode() int {
 	return runItemMenu("配置模式选择", []MenuItem{
 		{"1", "从头配置", "配置 URL、Token 和模型"},
@@ -1441,6 +1441,7 @@ func selectConfigMode() int {
 		{"3", "解决 400 报错", "禁用实验性请求头"},
 		{"4", "配置实验性功能", "启用/禁用 Agent Teams"},
 		{"5", "配置 VSCode 插件", "写入 VSCode settings.json"},
+		{"6", "清除所有配置", "移除所有已保存的配置"},
 	})
 }
 
@@ -2534,6 +2535,11 @@ func main() {
 		return
 	} else if configMode == 5 {
 		configureVSCode(cfg, true)
+		return
+	} else if configMode == 6 {
+		clearAllConfig()
+		fmt.Println()
+		styledInput("按回车键退出")
 		return
 	} else {
 		// 仅配置模型模式
