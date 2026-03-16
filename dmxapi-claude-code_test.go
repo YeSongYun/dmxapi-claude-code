@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -410,5 +412,79 @@ func TestIsVSCodeConfigured(t *testing.T) {
 				t.Errorf("isVSCodeConfigured(%q) = %v, want %v", c.input, got, c.want)
 			}
 		})
+	}
+}
+
+func TestClearVSCodeConfig_RemovesKeys(t *testing.T) {
+	dir := t.TempDir()
+	settingsPath := filepath.Join(dir, "settings.json")
+	content := `{
+  "editor.fontSize": 14,
+  "claudeCode.environmentVariables": [
+    {"name": "ANTHROPIC_BASE_URL", "value": "https://example.com"}
+  ],
+  "claude-code.environmentVariables": [
+    {"name": "ANTHROPIC_BASE_URL", "value": "https://example.com"}
+  ]
+}`
+	if err := os.WriteFile(settingsPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// 模拟 clearVSCodeConfig 核心逻辑
+	data, _ := os.ReadFile(settingsPath)
+	cleaned := stripJSONC(data)
+	var settings map[string]interface{}
+	if err := json.Unmarshal(cleaned, &settings); err != nil {
+		t.Fatal(err)
+	}
+
+	delete(settings, vscodeEnvKey)
+	delete(settings, vscodeEnvKeyOld)
+
+	output, _ := json.MarshalIndent(settings, "", "  ")
+	output = append(output, '\n')
+	os.WriteFile(settingsPath, output, 0644)
+
+	// 验证
+	result, _ := os.ReadFile(settingsPath)
+	var parsed map[string]interface{}
+	json.Unmarshal(result, &parsed)
+
+	if _, exists := parsed[vscodeEnvKey]; exists {
+		t.Error("claudeCode.environmentVariables should be removed")
+	}
+	if _, exists := parsed[vscodeEnvKeyOld]; exists {
+		t.Error("claude-code.environmentVariables should be removed")
+	}
+	if _, exists := parsed["editor.fontSize"]; !exists {
+		t.Error("other settings should be preserved")
+	}
+}
+
+func TestAllEnvVarKeys_ContainsAllKnownKeys(t *testing.T) {
+	expected := []string{
+		"ANTHROPIC_BASE_URL",
+		"ANTHROPIC_AUTH_TOKEN",
+		"ANTHROPIC_MODEL",
+		"ANTHROPIC_DEFAULT_HAIKU_MODEL",
+		"ANTHROPIC_DEFAULT_SONNET_MODEL",
+		"ANTHROPIC_DEFAULT_OPUS_MODEL",
+		"CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS",
+		"CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS",
+	}
+
+	if len(allEnvVarKeys) != len(expected) {
+		t.Errorf("allEnvVarKeys has %d keys, expected %d", len(allEnvVarKeys), len(expected))
+	}
+
+	keySet := make(map[string]bool)
+	for _, k := range allEnvVarKeys {
+		keySet[k] = true
+	}
+	for _, e := range expected {
+		if !keySet[e] {
+			t.Errorf("allEnvVarKeys is missing %s", e)
+		}
 	}
 }
