@@ -2,11 +2,12 @@ $VERSION = "v1.4.8"
 
 # 检测架构
 $arch = $env:PROCESSOR_ARCHITECTURE
-if ($arch -ne "AMD64") {
-    Write-Host "当前仅支持 x64 架构，检测到：$arch" -ForegroundColor Red
+if ($arch -ne "AMD64" -and $arch -ne "ARM64") {
+    Write-Host "不支持的架构: $arch" -ForegroundColor Red
     exit 1
 }
 
+# ARM64 Windows 通过 x64 模拟层运行 AMD64 二进制文件
 $filename = "dmxapi-claude-code-$VERSION-windows-amd64.exe"
 $url = "https://cnb.cool/dmxapi/dmxapi_claude_code/-/releases/download/$VERSION/$filename"
 $tmpFile = Join-Path $env:TEMP $filename
@@ -20,6 +21,8 @@ try {
 }
 
 Write-Host "正在启动配置工具..."
-& $tmpFile
+# 使用 Start-Process -NoNewWindow 让 exe 直接继承控制台句柄，
+# 避免通过 PowerShell 管道传输输出（否则 ANSI 颜色和交互式 TUI 无法正常显示）
+Start-Process -FilePath $tmpFile -NoNewWindow -Wait
 
 Remove-Item -Force $tmpFile -ErrorAction SilentlyContinue
