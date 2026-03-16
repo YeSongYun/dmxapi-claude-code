@@ -66,8 +66,22 @@ $:
           image: cnbcool/default-build-env
           script:
             - |
-              # 构造 AI 请求的 prompt
-              PROMPT="你是一个软件更新日志编辑器。请将以下 git 变更日志改写为面向普通用户的中文更新说明。\n\n要求：\n1. 保留版本号和日期\n2. 用通俗易懂的语言描述每个变更，去掉技术术语\n3. 保留 emoji 分类图标\n4. 每条说明控制在一行以内\n5. 输出必须以 \"## \" 开头（Markdown 二级标题）\n6. 只输出改写后的更新日志，不要输出其他内容\n\n原始变更日志：\n${RELEASE_NOTES}"
+              # 将 prompt 模板写入临时文件（避免 shell 特殊字符问题）
+              cat > /tmp/ai_prompt.txt << 'PROMPT_EOF'
+              你是一个软件更新日志编辑器。请将以下 git 变更日志改写为面向普通用户的中文更新说明。
+
+              要求：
+              1. 保留版本号和日期
+              2. 用通俗易懂的语言描述每个变更，去掉技术术语
+              3. 保留 emoji 分类图标
+              4. 每条说明控制在一行以内
+              5. 输出必须以 "## " 开头（Markdown 二级标题）
+              6. 只输出改写后的更新日志，不要输出其他内容
+
+              原始变更日志：
+              PROMPT_EOF
+              printf '%s' "${RELEASE_NOTES}" >> /tmp/ai_prompt.txt
+              PROMPT=$(cat /tmp/ai_prompt.txt)
 
               # 调用 Anthropic API（带 1 次重试）
               call_ai() {
@@ -87,7 +101,7 @@ $:
 
               # 重试逻辑
               if [ "$HTTP_CODE" != "200" ]; then
-                echo "AI API 首次调用失败 (HTTP $HTTP_CODE)，3 秒后重试..."
+                echo "AI API 首次调用失败 (HTTP $HTTP_CODE)，3 秒后重试..." >&2
                 sleep 3
                 RESPONSE=$(call_ai)
                 HTTP_CODE=$(echo "$RESPONSE" | tail -1)
@@ -97,12 +111,13 @@ $:
               # 提取 AI 输出
               if [ "$HTTP_CODE" = "200" ]; then
                 AI_TEXT=$(echo "$BODY" | jq -r '.content[0].text // empty')
+                AI_LEN=${#AI_TEXT}
                 # 验证输出格式
-                if echo "$AI_TEXT" | head -1 | grep -q '^## ' && [ ${#AI_TEXT} -le 5000 ]; then
+                if echo "$AI_TEXT" | head -1 | grep -q '^## ' && [ "$AI_LEN" -le 10000 ]; then
                   echo "$AI_TEXT"
                   exit 0
                 fi
-                echo "AI 输出格式验证失败，使用原始日志" >&2
+                echo "AI 输出格式验证失败（长度=${AI_LEN}），使用原始日志" >&2
               else
                 echo "AI API 调用失败 (HTTP $HTTP_CODE)，使用原始日志" >&2
               fi
@@ -117,6 +132,12 @@ $:
           image: cnbcool/default-build-env
           script:
             - |
+              # 检查 AI_RELEASE_NOTES 是否为空
+              if [ -z "${AI_RELEASE_NOTES}" ]; then
+                echo "AI_RELEASE_NOTES 为空，跳过 CHANGELOG 更新" >&2
+                exit 0
+              fi
+
               git config user.name "CNB Bot"
               git config user.email "bot@cnb.cool"
 
@@ -148,7 +169,10 @@ $:
               git add CHANGELOG.md
               git commit -m "docs: update CHANGELOG.md for ${CNB_BRANCH}"
               git remote set-url origin https://${GIT_USERNAME}:${GIT_ACCESS_TOKEN}@cnb.cool/dmxapi/dmxapi_claude_code.git
-              git push origin temp-changelog:main
+              if ! git push origin temp-changelog:main; then
+                echo "推送 CHANGELOG.md 到 main 失败（可能存在并发冲突），跳过本次更新" >&2
+                exit 0
+              fi
 
         # 4. 编译各平台二进制文件
         - name: 编译 Windows AMD64
