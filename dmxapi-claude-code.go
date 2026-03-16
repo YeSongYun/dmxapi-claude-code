@@ -980,6 +980,131 @@ func clearVSCodeConfig() clearResult {
 	return clearResult{Location: settingsPath, Status: "success", Message: "已移除配置键"}
 }
 
+// clearAllConfig 清除所有配置（模式6）。
+// 显示摘要 → 二次确认 → 逐位置清除 → 显示报告。
+func clearAllConfig() {
+	printSectionHeader("清除所有配置")
+	fmt.Println()
+
+	// 显示清除摘要
+	printInfo("将从以下位置清除所有 dmxapi 相关配置：")
+	fmt.Println()
+	switch runtime.GOOS {
+	case "windows":
+		fmt.Println("    • Windows 用户环境变量（注册表）")
+	default:
+		profile := detectShellProfile(runtime.GOOS)
+		for _, f := range profile.configFiles {
+			fmt.Printf("    • ~/%s\n", f)
+		}
+	}
+	if path, err := getVSCodeSettingsPath(); err == nil {
+		fmt.Printf("    • VSCode settings.json (%s)\n", path)
+	}
+	fmt.Println("    • 当前进程环境变量")
+	fmt.Println()
+	printInfo("涉及的环境变量：")
+	for _, key := range allEnvVarKeys {
+		fmt.Printf("    • %s\n", key)
+	}
+	fmt.Println()
+
+	printWarning("此操作不可撤销，Auth Token 清除后需要重新获取")
+	fmt.Println()
+
+	// 二次确认
+	if !styledConfirm("确定要清除所有配置吗") {
+		fmt.Println()
+		printInfo("已取消，未做任何更改")
+		return
+	}
+
+	fmt.Println()
+	var results []clearResult
+
+	// 1. 清除 Shell 配置文件 / Windows 注册表
+	switch runtime.GOOS {
+	case "windows":
+		errCount := 0
+		for _, key := range allEnvVarKeys {
+			if err := removeEnvVarWindows(key); err != nil {
+				errCount++
+			}
+		}
+		if errCount > 0 {
+			results = append(results, clearResult{
+				Location: "Windows 注册表",
+				Status:   "failed",
+				Message:  fmt.Sprintf("%d 个变量清除失败", errCount),
+			})
+		} else {
+			results = append(results, clearResult{
+				Location: "Windows 注册表",
+				Status:   "success",
+				Message:  fmt.Sprintf("已移除 %d 个环境变量", len(allEnvVarKeys)),
+			})
+		}
+	default:
+		errCount := 0
+		for _, key := range allEnvVarKeys {
+			if err := removeEnvVarUnix(key); err != nil {
+				errCount++
+			}
+		}
+		profile := detectShellProfile(runtime.GOOS)
+		loc := "Shell 配置文件"
+		if len(profile.configFiles) > 0 {
+			loc = "~/" + profile.configFiles[0]
+		}
+		if errCount > 0 {
+			results = append(results, clearResult{
+				Location: loc,
+				Status:   "failed",
+				Message:  fmt.Sprintf("%d 个变量清除失败", errCount),
+			})
+		} else {
+			results = append(results, clearResult{
+				Location: loc,
+				Status:   "success",
+				Message:  fmt.Sprintf("已移除 %d 个环境变量", len(allEnvVarKeys)),
+			})
+		}
+	}
+
+	// 2. 清除 VSCode 配置
+	results = append(results, clearVSCodeConfig())
+
+	// 3. 清除当前进程环境变量
+	for _, key := range allEnvVarKeys {
+		os.Unsetenv(key)
+	}
+	results = append(results, clearResult{
+		Location: "当前进程",
+		Status:   "success",
+		Message:  "已清除所有环境变量",
+	})
+
+	// 显示结果报告
+	fmt.Println()
+	printSectionHeader("清除结果")
+	fmt.Println()
+	for _, r := range results {
+		switch r.Status {
+		case "success":
+			printSuccess(fmt.Sprintf("%s — %s", r.Location, r.Message))
+		case "skipped":
+			printInfo(fmt.Sprintf("%s — %s（已跳过）", r.Location, r.Message))
+		case "failed":
+			printError(fmt.Sprintf("%s — %s", r.Location, r.Message))
+			if r.Err != nil {
+				fmt.Printf("    %s%s%s\n", colorRed, r.Err.Error(), colorReset)
+			}
+		}
+	}
+	fmt.Println()
+	printTip("重新打开终端后配置清除完全生效")
+}
+
 // configureVSCode 模式5交互流程：展示将写入的配置，用户确认后写入 VSCode settings.json。
 // exitOnDone=true 时末尾显示"按回车键退出"（独立运行模式5时使用）；
 // 嵌入模式1后置步骤时传 false，由 main 统一处理退出。
