@@ -270,6 +270,122 @@ func TestMergeVSCodeSettings(t *testing.T) {
 			t.Error("expected error for invalid JSON")
 		}
 	})
+
+	t.Run("JSONC 尾随逗号", func(t *testing.T) {
+		jsonc := []byte(`{
+			"editor.fontSize": 14,
+			"claudeCode.environmentVariables": [],
+		}`)
+		out, err := mergeVSCodeSettings(jsonc, envVars)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var result map[string]interface{}
+		if err := json.Unmarshal(out, &result); err != nil {
+			t.Fatal(err)
+		}
+		if result["editor.fontSize"] != float64(14) {
+			t.Error("editor.fontSize should be preserved from JSONC input")
+		}
+	})
+
+	t.Run("JSONC 单行注释", func(t *testing.T) {
+		jsonc := []byte(`{
+			// 这是注释
+			"editor.fontSize": 14
+		}`)
+		out, err := mergeVSCodeSettings(jsonc, envVars)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var result map[string]interface{}
+		if err := json.Unmarshal(out, &result); err != nil {
+			t.Fatal(err)
+		}
+		if result["editor.fontSize"] != float64(14) {
+			t.Error("editor.fontSize should be preserved from JSONC with comments")
+		}
+	})
+}
+
+func TestStripJSONC(t *testing.T) {
+	cases := []struct {
+		name      string
+		input     string
+		wantKey   string
+		wantValue interface{}
+	}{
+		{
+			name:      "尾随逗号",
+			input:     `{"editor.fontSize": 14,}`,
+			wantKey:   "editor.fontSize",
+			wantValue: float64(14),
+		},
+		{
+			name:      "单行注释",
+			input:     `{"key": "value" // 这是注释` + "\n}",
+			wantKey:   "key",
+			wantValue: "value",
+		},
+		{
+			name:      "块注释",
+			input:     `{"key": /* 块注释 */ "value"}`,
+			wantKey:   "key",
+			wantValue: "value",
+		},
+		{
+			name:      "字符串内含双斜杠不误删",
+			input:     `{"url": "http://example.com"}`,
+			wantKey:   "url",
+			wantValue: "http://example.com",
+		},
+		{
+			name:      "字符串内含逗号不误删",
+			input:     `{"data": "a,b,c"}`,
+			wantKey:   "data",
+			wantValue: "a,b,c",
+		},
+		{
+			name:      "尾随逗号在数组内",
+			input:     `{"arr": [1, 2, 3,]}`,
+			wantKey:   "arr",
+			wantValue: []interface{}{float64(1), float64(2), float64(3)},
+		},
+		{
+			name:      "纯净 JSON 不变",
+			input:     `{"a": 1, "b": "hello"}`,
+			wantKey:   "a",
+			wantValue: float64(1),
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cleaned := stripJSONC([]byte(c.input))
+			var result map[string]interface{}
+			if err := json.Unmarshal(cleaned, &result); err != nil {
+				t.Fatalf("stripJSONC 后仍无法解析 JSON: %v\n输入: %q\n清理后: %q", err, c.input, string(cleaned))
+			}
+			got := result[c.wantKey]
+			if wantSlice, ok := c.wantValue.([]interface{}); ok {
+				gotSlice, ok := got.([]interface{})
+				if !ok {
+					t.Fatalf("key %q: 期望 []interface{}, 实际 %T", c.wantKey, got)
+				}
+				if len(gotSlice) != len(wantSlice) {
+					t.Fatalf("key %q 长度: got %d, want %d", c.wantKey, len(gotSlice), len(wantSlice))
+				}
+				for i := range wantSlice {
+					if gotSlice[i] != wantSlice[i] {
+						t.Errorf("key %q[%d]: got %v, want %v", c.wantKey, i, gotSlice[i], wantSlice[i])
+					}
+				}
+				return
+			}
+			if got != c.wantValue {
+				t.Errorf("key %q: got %v (%T), want %v (%T)", c.wantKey, got, got, c.wantValue, c.wantValue)
+			}
+		})
+	}
 }
 
 func TestIsVSCodeConfigured(t *testing.T) {

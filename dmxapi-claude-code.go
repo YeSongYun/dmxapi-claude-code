@@ -416,6 +416,68 @@ func confirm(prompt string) bool {
 
 // ==================== URL 处理 ====================
 
+// ==================== JSONC 处理 ====================
+
+// trailingCommaRe 匹配 JSON 中 } 或 ] 前的尾随逗号
+var trailingCommaRe = regexp.MustCompile(`,(\s*[}\]])`)
+
+// stripJSONC 将 JSONC（VS Code settings.json 格式）转换为合法 JSON。
+// 支持剥离 // 单行注释、/* */ 块注释、以及尾随逗号。
+// 使用字符级状态机正确处理字符串内容（不误删字符串中的 // 或 ,）。
+func stripJSONC(data []byte) []byte {
+	var buf bytes.Buffer
+	inString := false
+	i := 0
+	for i < len(data) {
+		c := data[i]
+		if inString {
+			buf.WriteByte(c)
+			if c == '\\' && i+1 < len(data) {
+				// 转义字符：原样写入下一个字节
+				i++
+				buf.WriteByte(data[i])
+			} else if c == '"' {
+				inString = false
+			}
+			i++
+			continue
+		}
+		// 以下均为字符串外
+		if c == '"' {
+			inString = true
+			buf.WriteByte(c)
+			i++
+			continue
+		}
+		// 单行注释 //
+		if c == '/' && i+1 < len(data) && data[i+1] == '/' {
+			i += 2
+			for i < len(data) && data[i] != '\n' {
+				i++
+			}
+			continue
+		}
+		// 块注释 /* ... */
+		if c == '/' && i+1 < len(data) && data[i+1] == '*' {
+			i += 2
+			for i+1 < len(data) {
+				if data[i] == '*' && data[i+1] == '/' {
+					i += 2
+					break
+				}
+				i++
+			}
+			continue
+		}
+		buf.WriteByte(c)
+		i++
+	}
+	// 最后剥离尾随逗号
+	return trailingCommaRe.ReplaceAll(buf.Bytes(), []byte("$1"))
+}
+
+// ==================== URL 处理 ====================
+
 // ensureScheme 确保 URL 包含协议
 func ensureScheme(rawURL string) string {
 	rawURL = strings.TrimSpace(rawURL)
@@ -739,8 +801,9 @@ func buildVSCodeEnvVars(cfg Config, agentTeamsVal string) []map[string]string {
 // 保留所有其他键。existingJSON 必须是合法 JSON 对象。
 // 返回格式化后的 JSON 字节（2空格缩进）。
 func mergeVSCodeSettings(existingJSON []byte, envVars []map[string]string) ([]byte, error) {
+	cleaned := stripJSONC(existingJSON)
 	var settings map[string]interface{}
-	if err := json.Unmarshal(existingJSON, &settings); err != nil {
+	if err := json.Unmarshal(cleaned, &settings); err != nil {
 		return nil, fmt.Errorf("解析 settings.json 失败: %v", err)
 	}
 	settings[vscodeEnvKey] = envVars
