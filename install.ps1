@@ -1,4 +1,4 @@
-$VERSION = "v1.4.8"
+$VERSION = "v1.4.9"
 
 # 检测架构
 $arch = $env:PROCESSOR_ARCHITECTURE
