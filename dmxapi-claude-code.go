@@ -938,6 +938,48 @@ func saveVSCodeConfig(cfg Config) error {
 	return os.WriteFile(settingsPath, merged, 0644)
 }
 
+// clearVSCodeConfig 从 VSCode settings.json 中移除本工具写入的配置键。
+// 仅删除 claudeCode.environmentVariables 和旧版 claude-code.environmentVariables 键，
+// 保留用户的所有其他配置不变。
+func clearVSCodeConfig() clearResult {
+	settingsPath, err := getVSCodeSettingsPath()
+	if err != nil {
+		return clearResult{Location: "VSCode settings.json", Status: "skipped", Message: "无法确定路径"}
+	}
+
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		return clearResult{Location: settingsPath, Status: "skipped", Message: "文件不存在或无法读取"}
+	}
+
+	cleaned := stripJSONC(data)
+	var settings map[string]interface{}
+	if err := json.Unmarshal(cleaned, &settings); err != nil {
+		return clearResult{Location: settingsPath, Status: "failed", Message: "JSON 解析失败", Err: err}
+	}
+
+	_, hasNew := settings[vscodeEnvKey]
+	_, hasOld := settings[vscodeEnvKeyOld]
+	if !hasNew && !hasOld {
+		return clearResult{Location: settingsPath, Status: "skipped", Message: "未找到相关配置"}
+	}
+
+	delete(settings, vscodeEnvKey)
+	delete(settings, vscodeEnvKeyOld)
+
+	output, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return clearResult{Location: settingsPath, Status: "failed", Message: "JSON 序列化失败", Err: err}
+	}
+	output = append(output, '\n')
+
+	if err := os.WriteFile(settingsPath, output, 0644); err != nil {
+		return clearResult{Location: settingsPath, Status: "failed", Message: "写入失败", Err: err}
+	}
+
+	return clearResult{Location: settingsPath, Status: "success", Message: "已移除配置键"}
+}
+
 // configureVSCode 模式5交互流程：展示将写入的配置，用户确认后写入 VSCode settings.json。
 // exitOnDone=true 时末尾显示"按回车键退出"（独立运行模式5时使用）；
 // 嵌入模式1后置步骤时传 false，由 main 统一处理退出。
