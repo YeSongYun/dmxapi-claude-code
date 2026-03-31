@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -38,13 +39,13 @@ func TestVisibleLength(t *testing.T) {
 		input string
 		want  int
 	}{
-		{"hello", 5},                        // 普通 ASCII
-		{"\033[31mhello\033[0m", 5},          // SGR 颜色序列（原来就支持）
-		{"\033[2Khello", 5},                  // 清行序列 \033[2K（修复前会多算1）
-		{"\033[1;32mOK\033[0m", 2},           // 多参数 SGR
-		{"你好", 4},                          // CJK 双宽字符
-		{"\033[Ahello\033[B", 5},             // 光标移动序列（\033[A 上移，\033[B 下移）
-		{"", 0},                              // 空字符串
+		{"hello", 5},                // 普通 ASCII
+		{"\033[31mhello\033[0m", 5}, // SGR 颜色序列（原来就支持）
+		{"\033[2Khello", 5},         // 清行序列 \033[2K（修复前会多算1）
+		{"\033[1;32mOK\033[0m", 2},  // 多参数 SGR
+		{"你好", 4},                   // CJK 双宽字符
+		{"\033[Ahello\033[B", 5},    // 光标移动序列（\033[A 上移，\033[B 下移）
+		{"", 0},                     // 空字符串
 	}
 	for _, c := range cases {
 		got := visibleLength(c.input)
@@ -59,12 +60,12 @@ func TestIsWSLFromContent(t *testing.T) {
 		input string
 		want  bool
 	}{
-		{"Linux version 5.15.0-microsoft-standard-WSL2", true},    // WSL2 微软内核
-		{"Linux version 4.4.0-19041-Microsoft", true},             // WSL1 旧格式
-		{"Linux version 5.4.0-generic #1 Ubuntu", false},          // 普通 Linux
-		{"Darwin Kernel Version 23.0.0", false},                   // macOS
-		{"", false},                                               // 空内容
-		{"some wsl mention", true},                                // 包含 wsl 关键字
+		{"Linux version 5.15.0-microsoft-standard-WSL2", true}, // WSL2 微软内核
+		{"Linux version 4.4.0-19041-Microsoft", true},          // WSL1 旧格式
+		{"Linux version 5.4.0-generic #1 Ubuntu", false},       // 普通 Linux
+		{"Darwin Kernel Version 23.0.0", false},                // macOS
+		{"", false},                                            // 空内容
+		{"some wsl mention", true},                             // 包含 wsl 关键字
 	}
 	for _, c := range cases {
 		got := wslContentMatches(c.input)
@@ -75,7 +76,6 @@ func TestIsWSLFromContent(t *testing.T) {
 }
 
 func TestSetxOrRegAdd(t *testing.T) {
-	// 提取"选择命令"逻辑为可测试的纯函数
 	chooseCmd := func(value string) string {
 		if len(value) > 900 {
 			return "REG_ADD"
@@ -102,21 +102,17 @@ func TestDetectShellProfile(t *testing.T) {
 	cases := []struct {
 		shellEnv string
 		goos     string
-		wantFile string   // configFiles[0] 的期望值
-		wantSrc  string   // sourceCmd 期望值
+		wantFile string
+		wantSrc  string
 		wantFish bool
 	}{
-		// macOS 场景
 		{"/bin/zsh", "darwin", ".zshrc", "source ~/.zshrc", false},
 		{"/bin/bash", "darwin", ".bash_profile", "source ~/.bash_profile", false},
 		{"/usr/local/bin/fish", "darwin", ".config/fish/config.fish", "", true},
-		// Linux 场景
 		{"/bin/zsh", "linux", ".zshrc", "source ~/.zshrc", false},
 		{"/bin/bash", "linux", ".bashrc", "source ~/.bashrc", false},
 		{"/usr/bin/fish", "linux", ".config/fish/config.fish", "", true},
-		// 非标准 shell 路径
 		{"/opt/homebrew/bin/zsh", "darwin", ".zshrc", "source ~/.zshrc", false},
-		// 空 SHELL 变量回退
 		{"", "darwin", ".zshrc", "", false},
 		{"", "linux", ".bashrc", "", false},
 	}
@@ -129,16 +125,13 @@ func TestDetectShellProfile(t *testing.T) {
 			continue
 		}
 		if profile.configFiles[0] != c.wantFile {
-			t.Errorf("SHELL=%q GOOS=%q: configFiles[0]=%q, want %q",
-				c.shellEnv, c.goos, profile.configFiles[0], c.wantFile)
+			t.Errorf("SHELL=%q GOOS=%q: configFiles[0]=%q, want %q", c.shellEnv, c.goos, profile.configFiles[0], c.wantFile)
 		}
 		if c.shellEnv != "" && profile.sourceCmd != c.wantSrc {
-			t.Errorf("SHELL=%q GOOS=%q: sourceCmd=%q, want %q",
-				c.shellEnv, c.goos, profile.sourceCmd, c.wantSrc)
+			t.Errorf("SHELL=%q GOOS=%q: sourceCmd=%q, want %q", c.shellEnv, c.goos, profile.sourceCmd, c.wantSrc)
 		}
 		if profile.isFish != c.wantFish {
-			t.Errorf("SHELL=%q GOOS=%q: isFish=%v, want %v",
-				c.shellEnv, c.goos, profile.isFish, c.wantFish)
+			t.Errorf("SHELL=%q GOOS=%q: isFish=%v, want %v", c.shellEnv, c.goos, profile.isFish, c.wantFish)
 		}
 	}
 }
@@ -176,9 +169,16 @@ func TestVscodeSettingsPathFor(t *testing.T) {
 	for _, c := range cases {
 		got := vscodeSettingsPathFor(c.goos, c.homeDir, c.appData, c.wslWindowsHome)
 		if got != c.want {
-			t.Errorf("vscodeSettingsPathFor(%q,%q,%q,%q)\ngot  %q\nwant %q",
-				c.goos, c.homeDir, c.appData, c.wslWindowsHome, got, c.want)
+			t.Errorf("vscodeSettingsPathFor(%q,%q,%q,%q)\ngot  %q\nwant %q", c.goos, c.homeDir, c.appData, c.wslWindowsHome, got, c.want)
 		}
+	}
+}
+
+func TestClaudeSettingsPathFor(t *testing.T) {
+	got := claudeSettingsPathFor("/Users/alice")
+	want := "/Users/alice/.claude/settings.json"
+	if got != want {
+		t.Errorf("claudeSettingsPathFor() = %q, want %q", got, want)
 	}
 }
 
@@ -192,7 +192,6 @@ func TestBuildVSCodeEnvVars(t *testing.T) {
 		OpusModel:   "claude-opus-4-6-cc",
 	}
 
-	// 不含 Agent Teams
 	vars := buildVSCodeEnvVars(cfg, "")
 	if len(vars) != 7 {
 		t.Fatalf("expected 7 vars, got %d", len(vars))
@@ -216,7 +215,6 @@ func TestBuildVSCodeEnvVars(t *testing.T) {
 		t.Error("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS not found or wrong value")
 	}
 
-	// 含 Agent Teams
 	vars2 := buildVSCodeEnvVars(cfg, "1")
 	if len(vars2) != 8 {
 		t.Fatalf("expected 8 vars with agent teams, got %d", len(vars2))
@@ -233,9 +231,7 @@ func TestBuildVSCodeEnvVars(t *testing.T) {
 }
 
 func TestMergeVSCodeSettings(t *testing.T) {
-	envVars := []map[string]string{
-		{"name": "ANTHROPIC_BASE_URL", "value": "https://api.example.com"},
-	}
+	envVars := []map[string]string{{"name": "ANTHROPIC_BASE_URL", "value": "https://api.example.com"}}
 
 	t.Run("空文件写入", func(t *testing.T) {
 		out, err := mergeVSCodeSettings([]byte(`{}`), envVars)
@@ -310,6 +306,153 @@ func TestMergeVSCodeSettings(t *testing.T) {
 	})
 }
 
+func TestMergeClaudeSettings(t *testing.T) {
+	managed := map[string]string{
+		envBaseURL:                  "https://api.example.com",
+		envAuthToken:                "sk-test-token",
+		envDisableExperimentalBetas: fixedDisableExperimentalBetas,
+	}
+
+	t.Run("空文件写入", func(t *testing.T) {
+		out, err := mergeClaudeSettings([]byte(`{}`), managed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var result map[string]interface{}
+		if err := json.Unmarshal(out, &result); err != nil {
+			t.Fatal(err)
+		}
+		env, ok := result[claudeSettingsEnvKey].(map[string]interface{})
+		if !ok {
+			t.Fatal("env should be an object")
+		}
+		if env[envBaseURL] != "https://api.example.com" {
+			t.Errorf("expected %s to be written", envBaseURL)
+		}
+	})
+
+	t.Run("保留其他设置和其他 env 键", func(t *testing.T) {
+		existing := []byte(`{
+			"permissions": {"allow": ["Read(README.md)"]},
+			"env": {
+				"FOO": "bar",
+				"ANTHROPIC_BASE_URL": "old"
+			}
+		}`)
+		out, err := mergeClaudeSettings(existing, managed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var result map[string]interface{}
+		if err := json.Unmarshal(out, &result); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := result["permissions"]; !ok {
+			t.Fatal("permissions should be preserved")
+		}
+		env := result[claudeSettingsEnvKey].(map[string]interface{})
+		if env["FOO"] != "bar" {
+			t.Error("non-managed env key should be preserved")
+		}
+		if env[envBaseURL] != "https://api.example.com" {
+			t.Error("managed env key should be overwritten")
+		}
+	})
+
+	t.Run("JSONC 也可解析", func(t *testing.T) {
+		jsonc := []byte(`{
+			// 注释
+			"env": {
+				"FOO": "bar",
+			},
+		}`)
+		out, err := mergeClaudeSettings(jsonc, managed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var result map[string]interface{}
+		if err := json.Unmarshal(out, &result); err != nil {
+			t.Fatal(err)
+		}
+		env := result[claudeSettingsEnvKey].(map[string]interface{})
+		if env["FOO"] != "bar" {
+			t.Error("JSONC input should preserve existing env keys")
+		}
+	})
+
+	t.Run("env 不是对象时报错", func(t *testing.T) {
+		_, err := mergeClaudeSettings([]byte(`{"env": []}`), managed)
+		if err == nil {
+			t.Error("expected error when env is not an object")
+		}
+	})
+}
+
+func TestClearClaudeSettingsManagedKeys(t *testing.T) {
+	t.Run("仅删除受管键", func(t *testing.T) {
+		existing := []byte(`{
+			"env": {
+				"FOO": "bar",
+				"ANTHROPIC_BASE_URL": "https://example.com",
+				"CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1"
+			},
+			"permissions": {"allow": ["Read(README.md)"]}
+		}`)
+		out, removed, err := clearClaudeSettingsManagedKeys(existing)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !removed {
+			t.Fatal("expected managed keys to be removed")
+		}
+		var result map[string]interface{}
+		if err := json.Unmarshal(out, &result); err != nil {
+			t.Fatal(err)
+		}
+		env := result[claudeSettingsEnvKey].(map[string]interface{})
+		if _, exists := env[envBaseURL]; exists {
+			t.Error("managed key should be removed")
+		}
+		if env["FOO"] != "bar" {
+			t.Error("non-managed key should be preserved")
+		}
+		if _, ok := result["permissions"]; !ok {
+			t.Error("other settings should be preserved")
+		}
+	})
+
+	t.Run("env 清空后删除 env 对象", func(t *testing.T) {
+		existing := []byte(`{"env": {"ANTHROPIC_BASE_URL": "https://example.com"}}`)
+		out, removed, err := clearClaudeSettingsManagedKeys(existing)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !removed {
+			t.Fatal("expected managed key to be removed")
+		}
+		var result map[string]interface{}
+		if err := json.Unmarshal(out, &result); err != nil {
+			t.Fatal(err)
+		}
+		if _, exists := result[claudeSettingsEnvKey]; exists {
+			t.Error("empty env object should be removed")
+		}
+	})
+
+	t.Run("没有受管键时返回 skipped", func(t *testing.T) {
+		out, removed, err := clearClaudeSettingsManagedKeys([]byte(`{"env": {"FOO": "bar"}}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if removed {
+			t.Fatal("expected removed=false")
+		}
+		if out != nil {
+			t.Fatal("expected nil output when nothing removed")
+		}
+	})
+}
+
 func TestStripJSONC(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -317,48 +460,13 @@ func TestStripJSONC(t *testing.T) {
 		wantKey   string
 		wantValue interface{}
 	}{
-		{
-			name:      "尾随逗号",
-			input:     `{"editor.fontSize": 14,}`,
-			wantKey:   "editor.fontSize",
-			wantValue: float64(14),
-		},
-		{
-			name:      "单行注释",
-			input:     `{"key": "value" // 这是注释` + "\n}",
-			wantKey:   "key",
-			wantValue: "value",
-		},
-		{
-			name:      "块注释",
-			input:     `{"key": /* 块注释 */ "value"}`,
-			wantKey:   "key",
-			wantValue: "value",
-		},
-		{
-			name:      "字符串内含双斜杠不误删",
-			input:     `{"url": "http://example.com"}`,
-			wantKey:   "url",
-			wantValue: "http://example.com",
-		},
-		{
-			name:      "字符串内含逗号不误删",
-			input:     `{"data": "a,b,c"}`,
-			wantKey:   "data",
-			wantValue: "a,b,c",
-		},
-		{
-			name:      "尾随逗号在数组内",
-			input:     `{"arr": [1, 2, 3,]}`,
-			wantKey:   "arr",
-			wantValue: []interface{}{float64(1), float64(2), float64(3)},
-		},
-		{
-			name:      "纯净 JSON 不变",
-			input:     `{"a": 1, "b": "hello"}`,
-			wantKey:   "a",
-			wantValue: float64(1),
-		},
+		{"尾随逗号", `{"editor.fontSize": 14,}`, "editor.fontSize", float64(14)},
+		{"单行注释", `{"key": "value" // 这是注释` + "\n}", "key", "value"},
+		{"块注释", `{"key": /* 块注释 */ "value"}`, "key", "value"},
+		{"字符串内含双斜杠不误删", `{"url": "http://example.com"}`, "url", "http://example.com"},
+		{"字符串内含逗号不误删", `{"data": "a,b,c"}`, "data", "a,b,c"},
+		{"尾随逗号在数组内", `{"arr": [1, 2, 3,]}`, "arr", []interface{}{float64(1), float64(2), float64(3)}},
+		{"纯净 JSON 不变", `{"a": 1, "b": "hello"}`, "a", float64(1)},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -385,6 +493,28 @@ func TestStripJSONC(t *testing.T) {
 			}
 			if got != c.wantValue {
 				t.Errorf("key %q: got %v (%T), want %v (%T)", c.wantKey, got, got, c.wantValue, c.wantValue)
+			}
+		})
+	}
+}
+
+func TestIsClaudeSettingsConfigured(t *testing.T) {
+	cases := []struct {
+		name  string
+		input []byte
+		want  bool
+	}{
+		{"含受管键", []byte(`{"env": {"ANTHROPIC_BASE_URL": "https://example.com"}}`), true},
+		{"仅含非受管键", []byte(`{"env": {"FOO": "bar"}}`), false},
+		{"JSONC", []byte(`{// 注释
+"env": {"CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1",},}`), true},
+		{"无效 JSON", []byte(`not json`), false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := isClaudeSettingsConfigured(c.input)
+			if got != c.want {
+				t.Errorf("isClaudeSettingsConfigured(%q) = %v, want %v", c.input, got, c.want)
 			}
 		})
 	}
@@ -431,7 +561,6 @@ func TestClearVSCodeConfig_RemovesKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 模拟 clearVSCodeConfig 核心逻辑
 	data, _ := os.ReadFile(settingsPath)
 	cleaned := stripJSONC(data)
 	var settings map[string]interface{}
@@ -446,7 +575,6 @@ func TestClearVSCodeConfig_RemovesKeys(t *testing.T) {
 	output = append(output, '\n')
 	os.WriteFile(settingsPath, output, 0644)
 
-	// 验证
 	result, _ := os.ReadFile(settingsPath)
 	var parsed map[string]interface{}
 	json.Unmarshal(result, &parsed)
@@ -460,6 +588,62 @@ func TestClearVSCodeConfig_RemovesKeys(t *testing.T) {
 	if _, exists := parsed["editor.fontSize"]; !exists {
 		t.Error("other settings should be preserved")
 	}
+}
+
+func TestLoadExistingConfig_FallsBackToClaudeSettings(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", home)
+	}
+
+	settingsPath := claudeSettingsPathFor(home)
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	content := `{
+  "env": {
+    "ANTHROPIC_BASE_URL": "https://from-settings.example.com",
+    "ANTHROPIC_AUTH_TOKEN": "token-from-settings",
+    "ANTHROPIC_MODEL": "claude-sonnet-4-6-cc",
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+  }
+}`
+	if err := os.WriteFile(settingsPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("缺失时从 Claude settings 补齐", func(t *testing.T) {
+		t.Setenv(envBaseURL, "")
+		t.Setenv(envAuthToken, "")
+		t.Setenv(envModel, "")
+		t.Setenv(envAgentTeams, "")
+		cfg := loadExistingConfig()
+		if cfg.BaseURL != "https://from-settings.example.com" {
+			t.Errorf("BaseURL fallback failed: %q", cfg.BaseURL)
+		}
+		if cfg.AuthToken != "token-from-settings" {
+			t.Errorf("AuthToken fallback failed: %q", cfg.AuthToken)
+		}
+		if cfg.Model != "claude-sonnet-4-6-cc" {
+			t.Errorf("Model fallback failed: %q", cfg.Model)
+		}
+		if got := getManagedAgentTeamsValue(); got != "1" {
+			t.Errorf("AgentTeams fallback failed: %q", got)
+		}
+	})
+
+	t.Run("当前环境变量优先", func(t *testing.T) {
+		t.Setenv(envBaseURL, "https://from-env.example.com")
+		t.Setenv(envAgentTeams, "0")
+		cfg := loadExistingConfig()
+		if cfg.BaseURL != "https://from-env.example.com" {
+			t.Errorf("env value should override settings fallback: %q", cfg.BaseURL)
+		}
+		if got := getManagedAgentTeamsValue(); got != "0" {
+			t.Errorf("AgentTeams env value should override settings fallback: %q", got)
+		}
+	})
 }
 
 func TestAllEnvVarKeys_ContainsAllKnownKeys(t *testing.T) {

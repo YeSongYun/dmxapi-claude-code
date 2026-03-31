@@ -32,19 +32,22 @@ const (
 	appName = "Anthropic Claude Code CLI"
 
 	// 环境变量名
-	envBaseURL     = "ANTHROPIC_BASE_URL"
-	envAuthToken   = "ANTHROPIC_AUTH_TOKEN"
-	envModel       = "ANTHROPIC_MODEL"
-	envHaikuModel  = "ANTHROPIC_DEFAULT_HAIKU_MODEL"
-	envSonnetModel = "ANTHROPIC_DEFAULT_SONNET_MODEL"
-	envOpusModel               = "ANTHROPIC_DEFAULT_OPUS_MODEL"
+	envBaseURL                  = "ANTHROPIC_BASE_URL"
+	envAuthToken                = "ANTHROPIC_AUTH_TOKEN"
+	envModel                    = "ANTHROPIC_MODEL"
+	envHaikuModel               = "ANTHROPIC_DEFAULT_HAIKU_MODEL"
+	envSonnetModel              = "ANTHROPIC_DEFAULT_SONNET_MODEL"
+	envOpusModel                = "ANTHROPIC_DEFAULT_OPUS_MODEL"
 	envDisableExperimentalBetas = "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"
 	envAgentTeams               = "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"
 
 	// VSCode settings.json 中写入配置所用的键名（claudeCode 为扩展 package.json 中定义的配置前缀）
-	vscodeEnvKey    = "claudeCode.environmentVariables"
+	vscodeEnvKey = "claudeCode.environmentVariables"
 	// vscodeEnvKeyOld 为旧版工具使用的错误键名，仅用于向后兼容检测，不再写入
 	vscodeEnvKeyOld = "claude-code.environmentVariables"
+
+	// Claude Code settings.json 中写入环境变量所用的键名
+	claudeSettingsEnvKey = "env"
 
 	// 默认模型值
 	defaultModel       = "claude-sonnet-4-6-cc"
@@ -107,7 +110,7 @@ const (
 	styleBold = "\033[1m"
 	styleDim  = "\033[2m"
 	// 版本号
-	appVersion = "1.5.3"
+	appVersion = "1.5.4"
 	// 统一盒子内容宽度（不含左右边框字符）
 	boxWidth = 60
 )
@@ -319,7 +322,7 @@ type MenuItem struct {
 type KeyType int
 
 const (
-	KeyUp    KeyType = iota
+	KeyUp KeyType = iota
 	KeyDown
 	KeyEnter
 	KeyEsc
@@ -796,22 +799,46 @@ func vscodeSettingsPathFor(goos, homeDir, appData, wslWindowsHome string) string
 	}
 }
 
+// buildManagedEnvMap 根据 Config 构建本工具管理的环境变量集合（纯函数）。
+// agentTeamsVal 为空时不写入 CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS。
+func buildManagedEnvMap(cfg Config, agentTeamsVal string) map[string]string {
+	vars := map[string]string{
+		envBaseURL:                  cfg.BaseURL,
+		envAuthToken:                cfg.AuthToken,
+		envModel:                    cfg.Model,
+		envHaikuModel:               cfg.HaikuModel,
+		envSonnetModel:              cfg.SonnetModel,
+		envOpusModel:                cfg.OpusModel,
+		envDisableExperimentalBetas: fixedDisableExperimentalBetas,
+	}
+	if agentTeamsVal != "" {
+		vars[envAgentTeams] = agentTeamsVal
+	}
+	return vars
+}
+
 // buildVSCodeEnvVars 根据 Config 构建 claudeCode.environmentVariables 数组（纯函数）。
 // agentTeamsVal 为空时不写入 CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS。
 func buildVSCodeEnvVars(cfg Config, agentTeamsVal string) []map[string]string {
-	entries := []map[string]string{
-		{"name": envBaseURL, "value": cfg.BaseURL},
-		{"name": envAuthToken, "value": cfg.AuthToken},
-		{"name": envModel, "value": cfg.Model},
-		{"name": envHaikuModel, "value": cfg.HaikuModel},
-		{"name": envSonnetModel, "value": cfg.SonnetModel},
-		{"name": envOpusModel, "value": cfg.OpusModel},
-		{"name": envDisableExperimentalBetas, "value": fixedDisableExperimentalBetas},
+	managed := buildManagedEnvMap(cfg, agentTeamsVal)
+	keys := []string{
+		envBaseURL,
+		envAuthToken,
+		envModel,
+		envHaikuModel,
+		envSonnetModel,
+		envOpusModel,
+		envDisableExperimentalBetas,
 	}
 	if agentTeamsVal != "" {
+		keys = append(keys, envAgentTeams)
+	}
+
+	entries := make([]map[string]string, 0, len(keys))
+	for _, key := range keys {
 		entries = append(entries, map[string]string{
-			"name":  envAgentTeams,
-			"value": agentTeamsVal,
+			"name":  key,
+			"value": managed[key],
 		})
 	}
 	return entries
@@ -828,6 +855,238 @@ func mergeVSCodeSettings(existingJSON []byte, envVars []map[string]string) ([]by
 	}
 	settings[vscodeEnvKey] = envVars
 	return json.MarshalIndent(settings, "", "  ")
+}
+
+// claudeSettingsPathFor 返回用户级 ~/.claude/settings.json 的绝对路径（纯函数，便于测试）。
+func claudeSettingsPathFor(homeDir string) string {
+	return filepath.Join(homeDir, ".claude", "settings.json")
+}
+
+// getClaudeSettingsPath 返回当前用户 Claude Code settings.json 的绝对路径。
+func getClaudeSettingsPath() (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("无法确定 Claude settings.json 路径: %v", err)
+	}
+	return claudeSettingsPathFor(homeDir), nil
+}
+
+// mergeClaudeSettings 将本工具管理的环境变量写入 Claude Code settings.json 的 env 键，保留其他设置和其他 env 键。
+func mergeClaudeSettings(existingJSON []byte, managedEnv map[string]string) ([]byte, error) {
+	cleaned := stripJSONC(existingJSON)
+	var settings map[string]interface{}
+	if err := json.Unmarshal(cleaned, &settings); err != nil {
+		return nil, fmt.Errorf("解析 Claude settings.json 失败: %v", err)
+	}
+
+	envMap := map[string]interface{}{}
+	if existingEnv, ok := settings[claudeSettingsEnvKey]; ok {
+		existingMap, ok := existingEnv.(map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf("Claude settings.json 中 env 不是对象")
+		}
+		for key, value := range existingMap {
+			envMap[key] = value
+		}
+	}
+
+	for _, key := range allEnvVarKeys {
+		delete(envMap, key)
+	}
+	for key, value := range managedEnv {
+		if value == "" {
+			continue
+		}
+		envMap[key] = value
+	}
+
+	if len(envMap) == 0 {
+		delete(settings, claudeSettingsEnvKey)
+	} else {
+		settings[claudeSettingsEnvKey] = envMap
+	}
+
+	return json.MarshalIndent(settings, "", "  ")
+}
+
+// clearClaudeSettingsManagedKeys 从给定 JSON 中移除本工具管理的 env 键。
+// 返回清理后的 JSON、是否实际移除了配置以及错误。
+func clearClaudeSettingsManagedKeys(existingJSON []byte) ([]byte, bool, error) {
+	cleaned := stripJSONC(existingJSON)
+	var settings map[string]interface{}
+	if err := json.Unmarshal(cleaned, &settings); err != nil {
+		return nil, false, fmt.Errorf("解析 Claude settings.json 失败: %v", err)
+	}
+
+	existingEnv, ok := settings[claudeSettingsEnvKey]
+	if !ok {
+		return nil, false, nil
+	}
+	envMap, ok := existingEnv.(map[string]interface{})
+	if !ok {
+		return nil, false, fmt.Errorf("Claude settings.json 中 env 不是对象")
+	}
+
+	removed := false
+	for _, key := range allEnvVarKeys {
+		if _, exists := envMap[key]; exists {
+			delete(envMap, key)
+			removed = true
+		}
+	}
+	if !removed {
+		return nil, false, nil
+	}
+
+	if len(envMap) == 0 {
+		delete(settings, claudeSettingsEnvKey)
+	} else {
+		settings[claudeSettingsEnvKey] = envMap
+	}
+
+	output, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return nil, false, fmt.Errorf("序列化 Claude settings.json 失败: %v", err)
+	}
+	return output, true, nil
+}
+
+func saveClaudeSettingsConfigWithAgentTeams(cfg Config, agentTeamsVal string) error {
+	settingsPath, err := getClaudeSettingsPath()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0755); err != nil {
+		return fmt.Errorf("创建 Claude 配置目录失败: %v", err)
+	}
+
+	existingJSON := []byte("{}")
+	if data, err := os.ReadFile(settingsPath); err == nil {
+		existingJSON = data
+	}
+
+	managed := buildManagedEnvMap(cfg, agentTeamsVal)
+	merged, err := mergeClaudeSettings(existingJSON, managed)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(settingsPath, append(merged, '\n'), 0644)
+}
+
+// saveClaudeSettingsConfig 将 cfg 写入 Claude Code settings.json 的 env 键。
+func saveClaudeSettingsConfig(cfg Config) error {
+	return saveClaudeSettingsConfigWithAgentTeams(cfg, getManagedAgentTeamsValue())
+}
+
+// clearClaudeSettingsConfig 从 Claude Code settings.json 中移除本工具写入的 env 键。
+func clearClaudeSettingsConfig() clearResult {
+	settingsPath, err := getClaudeSettingsPath()
+	if err != nil {
+		return clearResult{Location: "Claude settings.json", Status: "skipped", Message: "无法确定路径"}
+	}
+
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		return clearResult{Location: settingsPath, Status: "skipped", Message: "文件不存在或无法读取"}
+	}
+
+	output, removed, err := clearClaudeSettingsManagedKeys(data)
+	if err != nil {
+		return clearResult{Location: settingsPath, Status: "failed", Message: "JSON 处理失败", Err: err}
+	}
+	if !removed {
+		return clearResult{Location: settingsPath, Status: "skipped", Message: "未找到相关配置"}
+	}
+	output = append(output, '\n')
+	if err := os.WriteFile(settingsPath, output, 0644); err != nil {
+		return clearResult{Location: settingsPath, Status: "failed", Message: "写入失败", Err: err}
+	}
+	return clearResult{Location: settingsPath, Status: "success", Message: "已移除受管 env 配置"}
+}
+
+// isClaudeSettingsConfigured 检测 JSON 内容是否含本工具管理的 Claude env 键。
+func isClaudeSettingsConfigured(data []byte) bool {
+	cleaned := stripJSONC(data)
+	var settings map[string]interface{}
+	if err := json.Unmarshal(cleaned, &settings); err != nil {
+		return false
+	}
+	existingEnv, ok := settings[claudeSettingsEnvKey]
+	if !ok {
+		return false
+	}
+	envMap, ok := existingEnv.(map[string]interface{})
+	if !ok {
+		return false
+	}
+	for _, key := range allEnvVarKeys {
+		if _, exists := envMap[key]; exists {
+			return true
+		}
+	}
+	return false
+}
+
+type loadedClaudeSettings struct {
+	Config
+	AgentTeams string
+}
+
+// loadConfigFromClaudeSettings 从 Claude Code settings.json 中读取本工具管理的配置。
+func loadConfigFromClaudeSettings() loadedClaudeSettings {
+	settingsPath, err := getClaudeSettingsPath()
+	if err != nil {
+		return loadedClaudeSettings{}
+	}
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		return loadedClaudeSettings{}
+	}
+
+	cleaned := stripJSONC(data)
+	var settings map[string]interface{}
+	if err := json.Unmarshal(cleaned, &settings); err != nil {
+		return loadedClaudeSettings{}
+	}
+	existingEnv, ok := settings[claudeSettingsEnvKey]
+	if !ok {
+		return loadedClaudeSettings{}
+	}
+	envMap, ok := existingEnv.(map[string]interface{})
+	if !ok {
+		return loadedClaudeSettings{}
+	}
+
+	getString := func(key string) string {
+		value, ok := envMap[key]
+		if !ok {
+			return ""
+		}
+		if s, ok := value.(string); ok {
+			return s
+		}
+		return ""
+	}
+
+	return loadedClaudeSettings{
+		Config: Config{
+			BaseURL:     getString(envBaseURL),
+			AuthToken:   getString(envAuthToken),
+			Model:       getString(envModel),
+			HaikuModel:  getString(envHaikuModel),
+			SonnetModel: getString(envSonnetModel),
+			OpusModel:   getString(envOpusModel),
+		},
+		AgentTeams: getString(envAgentTeams),
+	}
+}
+
+// getManagedAgentTeamsValue 返回受管的 Agent Teams 配置值：优先系统环境变量，缺失时回退 Claude settings。
+func getManagedAgentTeamsValue() string {
+	if value := getEnvVar(envAgentTeams); value != "" {
+		return value
+	}
+	return loadConfigFromClaudeSettings().AgentTeams
 }
 
 // winPathToWSL 将 Windows 路径（如 C:\Users\alice）转换为 WSL 挂载路径（/mnt/c/Users/alice）。
@@ -914,7 +1173,7 @@ func saveVSCodeConfig(cfg Config) error {
 		existingJSON = data
 	}
 
-	agentTeamsVal := getEnvVar(envAgentTeams)
+	agentTeamsVal := getManagedAgentTeamsValue()
 	envVars := buildVSCodeEnvVars(cfg, agentTeamsVal)
 
 	merged, err := mergeVSCodeSettings(existingJSON, envVars)
@@ -1001,6 +1260,9 @@ func clearAllConfig() {
 	if path, err := getVSCodeSettingsPath(); err == nil {
 		fmt.Printf("    • VSCode settings.json (%s)\n", path)
 	}
+	if path, err := getClaudeSettingsPath(); err == nil {
+		fmt.Printf("    • Claude Code settings.json (%s)\n", path)
+	}
 	fmt.Println("    • 当前进程环境变量")
 	fmt.Println()
 	printInfo("涉及的环境变量：")
@@ -1071,10 +1333,13 @@ func clearAllConfig() {
 		}
 	}
 
-	// 2. 清除 VSCode 配置
+	// 2. 清除 Claude Code settings 配置
+	results = append(results, clearClaudeSettingsConfig())
+
+	// 3. 清除 VSCode 配置
 	results = append(results, clearVSCodeConfig())
 
-	// 3. 清除当前进程环境变量
+	// 4. 清除当前进程环境变量
 	for _, key := range allEnvVarKeys {
 		os.Unsetenv(key)
 	}
@@ -1125,7 +1390,7 @@ func configureVSCode(cfg Config, exitOnDone bool) {
 	fmt.Println()
 
 	// 展示将写入的配置
-	agentTeamsVal := getEnvVar(envAgentTeams)
+	agentTeamsVal := getManagedAgentTeamsValue()
 	envVars := buildVSCodeEnvVars(cfg, agentTeamsVal)
 
 	if cfg.BaseURL == "" || cfg.AuthToken == "" {
@@ -1365,7 +1630,7 @@ func validateAPIConnection(baseURL, authToken, model string) error {
 
 // loadExistingConfig 加载现有配置
 func loadExistingConfig() Config {
-	return Config{
+	cfg := Config{
 		BaseURL:     getEnvVar(envBaseURL),
 		AuthToken:   getEnvVar(envAuthToken),
 		Model:       getEnvVar(envModel),
@@ -1373,6 +1638,27 @@ func loadExistingConfig() Config {
 		SonnetModel: getEnvVar(envSonnetModel),
 		OpusModel:   getEnvVar(envOpusModel),
 	}
+
+	fallback := loadConfigFromClaudeSettings()
+	if cfg.BaseURL == "" {
+		cfg.BaseURL = fallback.BaseURL
+	}
+	if cfg.AuthToken == "" {
+		cfg.AuthToken = fallback.AuthToken
+	}
+	if cfg.Model == "" {
+		cfg.Model = fallback.Model
+	}
+	if cfg.HaikuModel == "" {
+		cfg.HaikuModel = fallback.HaikuModel
+	}
+	if cfg.SonnetModel == "" {
+		cfg.SonnetModel = fallback.SonnetModel
+	}
+	if cfg.OpusModel == "" {
+		cfg.OpusModel = fallback.OpusModel
+	}
+	return cfg
 }
 
 // getNewBaseURL 获取新的 Base URL
@@ -1991,7 +2277,7 @@ func runL2Menu(typeName, currentValue string) string {
 		key := readRawKey()
 		switch key {
 		case KeyUp:
-			idx = (idx - 1 + len(presetModels)+1) % (len(presetModels) + 1)
+			idx = (idx - 1 + len(presetModels) + 1) % (len(presetModels) + 1)
 		case KeyDown:
 			idx = (idx + 1) % (len(presetModels) + 1)
 		case KeyEnter:
@@ -2121,32 +2407,40 @@ func configureModels(cfg *Config) {
 	printSuccess("模型配置已完成")
 }
 
-// saveConfig 保存配置（批量设置，一次系统调用）
+// saveConfig 保存配置（同时写入系统环境变量与 Claude settings）。
 func saveConfig(cfg Config) error {
-	vars := map[string]string{
-		envBaseURL:     cfg.BaseURL,
-		envAuthToken:   cfg.AuthToken,
-		envModel:       cfg.Model,
-		envHaikuModel:  cfg.HaikuModel,
-		envSonnetModel: cfg.SonnetModel,
-		envOpusModel:               cfg.OpusModel,
-		envDisableExperimentalBetas: fixedDisableExperimentalBetas,
-	}
+	vars := buildManagedEnvMap(cfg, getManagedAgentTeamsValue())
 
-	// 设置当前进程环境变量
+	// 设置当前进程环境变量，保证当前会话立即可用
 	for key, value := range vars {
 		if value != "" {
 			os.Setenv(key, value)
 		}
 	}
 
-	// 批量持久化到系统
+	var errs []string
+
+	// 持久化到系统环境变量
 	switch runtime.GOOS {
 	case "windows":
-		return setEnvVarsWindows(vars)
+		if err := setEnvVarsWindows(vars); err != nil {
+			errs = append(errs, fmt.Sprintf("系统环境变量写入失败: %v", err))
+		}
 	default:
-		return setEnvVarsUnix(vars)
+		if err := setEnvVarsUnix(vars); err != nil {
+			errs = append(errs, fmt.Sprintf("系统环境变量写入失败: %v", err))
+		}
 	}
+
+	// 同步写入 Claude settings.json
+	if err := saveClaudeSettingsConfig(cfg); err != nil {
+		errs = append(errs, fmt.Sprintf("Claude settings.json 写入失败: %v", err))
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf(strings.Join(errs, "；"))
+	}
+	return nil
 }
 
 // configureAgentTeams 配置实验性 Agent Teams 功能环境变量。
@@ -2156,7 +2450,7 @@ func configureAgentTeams(exitOnDone bool) {
 	printSectionHeader("配置实验性 Agent Teams 功能")
 	fmt.Println()
 
-	currentVal := getEnvVar(envAgentTeams)
+	currentVal := getManagedAgentTeamsValue()
 	if currentVal == "1" {
 		printInfo(fmt.Sprintf("当前状态: %s已启用%s", colorBrightGreen, colorReset))
 	} else {
@@ -2186,7 +2480,12 @@ func configureAgentTeams(exitOnDone bool) {
 			printError(fmt.Sprintf("设置失败: %v", err))
 		} else {
 			os.Setenv(envAgentTeams, "1")
-			printSuccess(fmt.Sprintf("已启用 %s=1", envAgentTeams))
+			if err := saveClaudeSettingsConfigWithAgentTeams(loadExistingConfig(), "1"); err != nil {
+				printError(fmt.Sprintf("Claude settings 同步失败: %v", err))
+				os.Unsetenv(envAgentTeams)
+			} else {
+				printSuccess(fmt.Sprintf("已启用 %s=1", envAgentTeams))
+			}
 		}
 	} else {
 		if currentVal == "" {
@@ -2202,7 +2501,12 @@ func configureAgentTeams(exitOnDone bool) {
 				printError(fmt.Sprintf("删除失败: %v", err))
 			} else {
 				os.Unsetenv(envAgentTeams)
-				printSuccess(fmt.Sprintf("已禁用并删除 %s", envAgentTeams))
+				if err := saveClaudeSettingsConfigWithAgentTeams(loadExistingConfig(), ""); err != nil {
+					printError(fmt.Sprintf("Claude settings 同步失败: %v", err))
+					os.Setenv(envAgentTeams, currentVal)
+				} else {
+					printSuccess(fmt.Sprintf("已禁用并删除 %s", envAgentTeams))
+				}
 			}
 		}
 	}
@@ -2248,10 +2552,20 @@ func printSummary(cfg Config) {
 			valueColor, value, colorReset)
 	}
 
-	// Agent Teams：读取当前进程环境变量（配置后 os.Setenv 已更新）
+	// Agent Teams：优先读取系统环境变量，缺失时回退 Claude settings
 	agentTeamsDisplay, agentTeamsColor := "未启用", colorWhite
-	if getEnvVar(envAgentTeams) == "1" {
+	if getManagedAgentTeamsValue() == "1" {
 		agentTeamsDisplay, agentTeamsColor = "已启用", colorBrightGreen
+	}
+
+	// Claude Settings：解析 ~/.claude/settings.json，检测受管 env 是否存在
+	claudeSettingsDisplay, claudeSettingsColor := "未配置", colorWhite
+	if path, err := getClaudeSettingsPath(); err == nil {
+		if data, err := os.ReadFile(path); err == nil {
+			if isClaudeSettingsConfigured(data) {
+				claudeSettingsDisplay, claudeSettingsColor = "已配置", colorBrightGreen
+			}
+		}
 	}
 
 	// VSCode Plugin：解析 settings.json，检测目标键是否存在
@@ -2273,6 +2587,7 @@ func printSummary(cfg Config) {
 		makeRow("Opus Model", cfg.OpusModel, colorCyan),
 		makeRow("Disable Betas", fixedDisableExperimentalBetas, colorMagenta),
 		makeRow("Agent Teams", agentTeamsDisplay, agentTeamsColor),
+		makeRow("Claude Settings", claudeSettingsDisplay, claudeSettingsColor),
 		makeRow("VSCode Plugin", vscodeDisplay, vscodeColor),
 	}
 	printBox("配置摘要", colorBrightWhite, lines)
@@ -2307,8 +2622,9 @@ func printSummary(cfg Config) {
 // 或旧版工具写入的 claude-code.environmentVariables 键（向后兼容）。
 // 用于判断 VSCode settings.json 是否已由本工具写入配置。
 func isVSCodeConfigured(data []byte) bool {
+	cleaned := stripJSONC(data)
 	var settings map[string]interface{}
-	if err := json.Unmarshal(data, &settings); err != nil {
+	if err := json.Unmarshal(cleaned, &settings); err != nil {
 		return false
 	}
 	_, hasNew := settings[vscodeEnvKey]
