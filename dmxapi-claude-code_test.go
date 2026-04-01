@@ -100,32 +100,33 @@ func TestSetxOrRegAdd(t *testing.T) {
 
 func TestDetectShellProfile(t *testing.T) {
 	cases := []struct {
-		shellEnv string
-		goos     string
-		wantFile string
-		wantSrc  string
-		wantFish bool
+		shellEnv    string
+		goos        string
+		wantFiles   []string
+		wantSrc     string
+		wantFish    bool
 	}{
-		{"/bin/zsh", "darwin", ".zshrc", "source ~/.zshrc", false},
-		{"/bin/bash", "darwin", ".bash_profile", "source ~/.bash_profile", false},
-		{"/usr/local/bin/fish", "darwin", ".config/fish/config.fish", "", true},
-		{"/bin/zsh", "linux", ".zshrc", "source ~/.zshrc", false},
-		{"/bin/bash", "linux", ".bashrc", "source ~/.bashrc", false},
-		{"/usr/bin/fish", "linux", ".config/fish/config.fish", "", true},
-		{"/opt/homebrew/bin/zsh", "darwin", ".zshrc", "source ~/.zshrc", false},
-		{"", "darwin", ".zshrc", "", false},
-		{"", "linux", ".bashrc", "", false},
+		{"/bin/zsh", "darwin", []string{".zshrc", ".zprofile"}, "source ~/.zshrc", false},
+		{"/bin/bash", "darwin", []string{".bash_profile"}, "source ~/.bash_profile", false},
+		{"/usr/local/bin/fish", "darwin", []string{".config/fish/config.fish"}, "", true},
+		{"/bin/zsh", "linux", []string{".zshrc"}, "source ~/.zshrc", false},
+		{"/bin/bash", "linux", []string{".bashrc"}, "source ~/.bashrc", false},
+		{"/usr/bin/fish", "linux", []string{".config/fish/config.fish"}, "", true},
+		{"/opt/homebrew/bin/zsh", "darwin", []string{".zshrc", ".zprofile"}, "source ~/.zshrc", false},
+		{"", "darwin", []string{".zshrc", ".zprofile", ".bash_profile"}, "", false},
+		{"", "linux", []string{".bashrc", ".profile"}, "", false},
 	}
 
 	for _, c := range cases {
 		t.Setenv("SHELL", c.shellEnv)
 		profile := detectShellProfile(c.goos)
-		if len(profile.configFiles) == 0 {
-			t.Errorf("SHELL=%q GOOS=%q: configFiles 为空", c.shellEnv, c.goos)
-			continue
+		if len(profile.configFiles) != len(c.wantFiles) {
+			t.Fatalf("SHELL=%q GOOS=%q: configFiles=%q, want %q", c.shellEnv, c.goos, profile.configFiles, c.wantFiles)
 		}
-		if profile.configFiles[0] != c.wantFile {
-			t.Errorf("SHELL=%q GOOS=%q: configFiles[0]=%q, want %q", c.shellEnv, c.goos, profile.configFiles[0], c.wantFile)
+		for i, wantFile := range c.wantFiles {
+			if profile.configFiles[i] != wantFile {
+				t.Errorf("SHELL=%q GOOS=%q: configFiles[%d]=%q, want %q", c.shellEnv, c.goos, i, profile.configFiles[i], wantFile)
+			}
 		}
 		if c.shellEnv != "" && profile.sourceCmd != c.wantSrc {
 			t.Errorf("SHELL=%q GOOS=%q: sourceCmd=%q, want %q", c.shellEnv, c.goos, profile.sourceCmd, c.wantSrc)
@@ -133,6 +134,69 @@ func TestDetectShellProfile(t *testing.T) {
 		if profile.isFish != c.wantFish {
 			t.Errorf("SHELL=%q GOOS=%q: isFish=%v, want %v", c.shellEnv, c.goos, profile.isFish, c.wantFish)
 		}
+	}
+}
+
+func TestShellLineManagesEnvVar(t *testing.T) {
+	cases := []struct {
+		name   string
+		line   string
+		key    string
+		isFish bool
+		want   bool
+	}{
+		{"export", "export ANTHROPIC_BASE_URL='https://api.example.com'", envBaseURL, false, true},
+		{"leading spaces", "  export ANTHROPIC_BASE_URL=https://api.example.com", envBaseURL, false, true},
+		{"declare x", "declare -x ANTHROPIC_AUTH_TOKEN='sk-test'", envAuthToken, false, true},
+		{"typeset x", "typeset -x ANTHROPIC_MODEL='claude-sonnet-4-6-cc'", envModel, false, true},
+		{"assign and export", "ANTHROPIC_MODEL='claude-sonnet-4-6-cc'; export ANTHROPIC_MODEL", envModel, false, true},
+		{"fish set ux", "set -Ux ANTHROPIC_MODEL claude-sonnet-4-6-cc", envModel, true, true},
+		{"comment ignored", "# export ANTHROPIC_MODEL=foo", envModel, false, false},
+		{"different key", "export OTHER_KEY=1", envModel, false, false},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := shellLineManagesEnvVar(c.line, c.key, c.isFish)
+			if got != c.want {
+				t.Fatalf("shellLineManagesEnvVar(%q, %q, %v) = %v, want %v", c.line, c.key, c.isFish, got, c.want)
+			}
+		})
+	}
+}
+
+func TestRemoveEnvVarsUnixFromFile(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, ".zshrc")
+	content := strings.Join([]string{
+		"export ANTHROPIC_BASE_URL='https://api.example.com'",
+		"declare -x ANTHROPIC_AUTH_TOKEN='sk-test'",
+		"ANTHROPIC_MODEL='claude-sonnet-4-6-cc'; export ANTHROPIC_MODEL",
+		"export KEEP_ME=1",
+		"",
+	}, "\n")
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	removed, err := removeEnvVarsUnixFromFile(configPath, []string{envBaseURL, envAuthToken, envModel}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 3 {
+		t.Fatalf("removed=%d, want 3", removed)
+	}
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(data)
+	if strings.Contains(got, envBaseURL) || strings.Contains(got, envAuthToken) || strings.Contains(got, envModel) {
+		t.Fatalf("managed env vars should be removed, got %q", got)
+	}
+	if !strings.Contains(got, "export KEEP_ME=1") {
+		t.Fatalf("unmanaged line should be preserved, got %q", got)
 	}
 }
 

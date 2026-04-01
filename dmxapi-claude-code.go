@@ -110,7 +110,7 @@ const (
 	styleBold = "\033[1m"
 	styleDim  = "\033[2m"
 	// 版本号
-	appVersion = "1.5.4"
+	appVersion = "1.5.5"
 	// 统一盒子内容宽度（不含左右边框字符）
 	boxWidth = 60
 )
@@ -581,8 +581,12 @@ func detectShellProfile(goos string) shellProfile {
 
 	switch {
 	case strings.Contains(shell, "zsh"):
+		configFiles := []string{".zshrc"}
+		if goos == "darwin" {
+			configFiles = append(configFiles, ".zprofile")
+		}
 		return shellProfile{
-			configFiles: []string{".zshrc"},
+			configFiles: configFiles,
 			sourceCmd:   "source ~/.zshrc",
 		}
 	case strings.Contains(shell, "fish"):
@@ -605,7 +609,7 @@ func detectShellProfile(goos string) shellProfile {
 	default:
 		// $SHELL 为空或未知 shell：回退到写全部常见文件（兼容旧行为）
 		if goos == "darwin" {
-			return shellProfile{configFiles: []string{".zshrc", ".bash_profile"}}
+			return shellProfile{configFiles: []string{".zshrc", ".zprofile", ".bash_profile"}}
 		}
 		return shellProfile{configFiles: []string{".bashrc", ".profile"}}
 	}
@@ -1239,6 +1243,99 @@ func clearVSCodeConfig() clearResult {
 	return clearResult{Location: settingsPath, Status: "success", Message: "已移除配置键"}
 }
 
+// shellConfigLocation 返回 shell 配置文件的展示名称。
+func shellConfigLocation(configFile string) string {
+	return "~/" + configFile
+}
+
+// shellLineManagesEnvVar 判断一行 shell 配置是否在管理指定环境变量。
+func shellLineManagesEnvVar(line, key string, isFish bool) bool {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+		return false
+	}
+
+	if isFish {
+		return strings.HasPrefix(trimmed, fmt.Sprintf("set -Ux %s ", key)) || trimmed == fmt.Sprintf("set -Ux %s", key)
+	}
+
+	patterns := []string{
+		fmt.Sprintf("export %s=", key),
+		fmt.Sprintf("declare -x %s=", key),
+		fmt.Sprintf("typeset -x %s=", key),
+		fmt.Sprintf("readonly %s=", key),
+	}
+	for _, pattern := range patterns {
+		if strings.HasPrefix(trimmed, pattern) {
+			return true
+		}
+	}
+
+	assignPrefix := key + "="
+	if !strings.HasPrefix(trimmed, assignPrefix) {
+		return false
+	}
+
+	remainder := strings.TrimSpace(trimmed[len(assignPrefix):])
+	if remainder == "" {
+		return false
+	}
+	return strings.Contains(remainder, "; export "+key) || strings.HasSuffix(remainder, " export "+key)
+}
+
+// removeEnvVarsUnixFromFile 从单个 Unix shell 配置文件中删除受管环境变量。
+func removeEnvVarsUnixFromFile(configPath string, keys []string, isFish bool) (removedCount int, err error) {
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		return 0, nil
+	}
+
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		return 0, err
+	}
+	info, statErr := os.Stat(configPath)
+	perm := os.FileMode(0644)
+	if statErr == nil {
+		perm = info.Mode()
+	}
+
+	normalized := strings.ReplaceAll(string(content), "\r\n", "\n")
+	normalized = strings.ReplaceAll(normalized, "\r", "\n")
+	lines := strings.Split(normalized, "\n")
+	newLines := make([]string, 0, len(lines))
+	prevBlank := false
+
+	for _, line := range lines {
+		managed := false
+		for _, key := range keys {
+			if shellLineManagesEnvVar(line, key, isFish) {
+				removedCount++
+				managed = true
+				break
+			}
+		}
+		if managed {
+			continue
+		}
+
+		isBlank := strings.TrimSpace(line) == ""
+		if isBlank && prevBlank {
+			continue
+		}
+		newLines = append(newLines, line)
+		prevBlank = isBlank
+	}
+
+	newContent := strings.Join(newLines, "\n")
+	if !strings.HasSuffix(newContent, "\n") {
+		newContent += "\n"
+	}
+	if err := os.WriteFile(configPath, []byte(newContent), perm); err != nil {
+		return removedCount, fmt.Errorf("写入 %s 失败: %v", configPath, err)
+	}
+	return removedCount, nil
+}
+
 // clearAllConfig 清除所有配置（模式6）。
 // 显示摘要 → 二次确认 → 逐位置清除 → 显示报告。
 func clearAllConfig() {
@@ -1254,7 +1351,7 @@ func clearAllConfig() {
 	default:
 		profile := detectShellProfile(runtime.GOOS)
 		for _, f := range profile.configFiles {
-			fmt.Printf("    • ~/%s\n", f)
+			fmt.Printf("    • %s\n", shellConfigLocation(f))
 		}
 	}
 	if path, err := getVSCodeSettingsPath(); err == nil {
@@ -1274,7 +1371,6 @@ func clearAllConfig() {
 	printWarning("此操作不可撤销，Auth Token 清除后需要重新获取")
 	fmt.Println()
 
-	// 二次确认
 	if !styledConfirm("确定要清除所有配置吗") {
 		fmt.Println()
 		printInfo("已取消，未做任何更改")
@@ -1284,7 +1380,6 @@ func clearAllConfig() {
 	fmt.Println()
 	var results []clearResult
 
-	// 1. 清除 Shell 配置文件 / Windows 注册表
 	switch runtime.GOOS {
 	case "windows":
 		errCount := 0
@@ -1307,49 +1402,58 @@ func clearAllConfig() {
 			})
 		}
 	default:
-		errCount := 0
-		for _, key := range allEnvVarKeys {
-			if err := removeEnvVarUnix(key); err != nil {
-				errCount++
-			}
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			results = append(results, clearResult{Location: "Shell 配置文件", Status: "failed", Message: "无法确定用户目录", Err: err})
+			break
 		}
 		profile := detectShellProfile(runtime.GOOS)
-		loc := "Shell 配置文件"
-		if len(profile.configFiles) > 0 {
-			loc = "~/" + profile.configFiles[0]
-		}
-		if errCount > 0 {
-			results = append(results, clearResult{
-				Location: loc,
-				Status:   "failed",
-				Message:  fmt.Sprintf("%d 个变量清除失败", errCount),
-			})
-		} else {
-			results = append(results, clearResult{
-				Location: loc,
-				Status:   "success",
-				Message:  fmt.Sprintf("已移除 %d 个环境变量", len(allEnvVarKeys)),
-			})
+		for _, configFile := range profile.configFiles {
+			configPath := filepath.Join(homeDir, configFile)
+			location := shellConfigLocation(configFile)
+			if _, err := os.Stat(configPath); os.IsNotExist(err) {
+				results = append(results, clearResult{Location: location, Status: "skipped", Message: "未找到相关配置"})
+				continue
+			} else if err != nil {
+				results = append(results, clearResult{Location: location, Status: "failed", Message: "无法读取文件状态", Err: err})
+				continue
+			}
+			removedCount, err := removeEnvVarsUnixFromFile(configPath, allEnvVarKeys, profile.isFish)
+			switch {
+			case err != nil:
+				results = append(results, clearResult{Location: location, Status: "failed", Message: "清理失败", Err: err})
+			case removedCount > 0:
+				results = append(results, clearResult{Location: location, Status: "success", Message: fmt.Sprintf("已移除 %d 个环境变量配置", removedCount)})
+			default:
+				results = append(results, clearResult{Location: location, Status: "skipped", Message: "未找到相关配置"})
+			}
 		}
 	}
 
-	// 2. 清除 Claude Code settings 配置
 	results = append(results, clearClaudeSettingsConfig())
-
-	// 3. 清除 VSCode 配置
 	results = append(results, clearVSCodeConfig())
 
-	// 4. 清除当前进程环境变量
+	persistentFailure := false
+	for _, r := range results {
+		if r.Status == "failed" {
+			persistentFailure = true
+			break
+		}
+	}
+
 	for _, key := range allEnvVarKeys {
 		os.Unsetenv(key)
+	}
+	processMsg := "已清除当前会话中的所有环境变量"
+	if persistentFailure {
+		processMsg = "已清除当前会话中的所有环境变量，但持久化配置仍有失败项"
 	}
 	results = append(results, clearResult{
 		Location: "当前进程",
 		Status:   "success",
-		Message:  "已清除所有环境变量",
+		Message:  processMsg,
 	})
 
-	// 显示结果报告
 	fmt.Println()
 	printSectionHeader("清除结果")
 	fmt.Println()
@@ -1367,7 +1471,11 @@ func clearAllConfig() {
 		}
 	}
 	fmt.Println()
-	printTip("重新打开终端后配置清除完全生效")
+	if persistentFailure {
+		printTip("当前会话环境变量已清除，但仍有持久化配置未清理成功，请按上方失败项继续检查")
+	} else {
+		printTip("重新打开终端后配置清除完全生效")
+	}
 }
 
 // configureVSCode 模式5交互流程：展示将写入的配置，用户确认后写入 VSCode settings.json。
@@ -1389,7 +1497,6 @@ func configureVSCode(cfg Config, exitOnDone bool) {
 	printInfo(fmt.Sprintf("目标文件: %s", settingsPath))
 	fmt.Println()
 
-	// 展示将写入的配置
 	agentTeamsVal := getManagedAgentTeamsValue()
 	envVars := buildVSCodeEnvVars(cfg, agentTeamsVal)
 
@@ -1447,57 +1554,15 @@ func removeEnvVarUnix(key string) error {
 	}
 
 	profile := detectShellProfile(runtime.GOOS)
-
-	// fish shell：扫描并删除 set -Ux 行（set -Ux 是写入时的语法，故匹配它来删除）
-	fishMarker := fmt.Sprintf("set -Ux %s ", key)
-	exportMarker := fmt.Sprintf("export %s=", key)
-
 	for _, configFile := range profile.configFiles {
 		configPath := filepath.Join(homeDir, configFile)
 		if _, err := os.Stat(configPath); os.IsNotExist(err) {
-			continue // 文件不存在，无需删除
-		}
-		content, err := os.ReadFile(configPath)
-		if err != nil {
 			continue
+		} else if err != nil {
+			return err
 		}
-		info, statErr := os.Stat(configPath)
-		perm := os.FileMode(0644)
-		if statErr == nil {
-			perm = info.Mode()
-		}
-		normalized := strings.ReplaceAll(string(content), "\r\n", "\n")
-		normalized = strings.ReplaceAll(normalized, "\r", "\n")
-		lines := strings.Split(normalized, "\n")
-
-		// 根据 shell 选择要删除的行标记
-		var lineMarker string
-		if profile.isFish {
-			lineMarker = fishMarker
-		} else {
-			lineMarker = exportMarker
-		}
-
-		newLines := make([]string, 0, len(lines))
-		prevBlank := false
-		for _, line := range lines {
-			if strings.HasPrefix(strings.TrimSpace(line), lineMarker) {
-				continue
-			}
-			isBlank := strings.TrimSpace(line) == ""
-			if isBlank && prevBlank {
-				continue
-			}
-			newLines = append(newLines, line)
-			prevBlank = isBlank
-		}
-
-		newContent := strings.Join(newLines, "\n")
-		if !strings.HasSuffix(newContent, "\n") {
-			newContent += "\n"
-		}
-		if err := os.WriteFile(configPath, []byte(newContent), perm); err != nil {
-			return fmt.Errorf("写入 %s 失败: %v", configPath, err)
+		if _, err := removeEnvVarsUnixFromFile(configPath, []string{key}, profile.isFish); err != nil {
+			return err
 		}
 	}
 	return nil
