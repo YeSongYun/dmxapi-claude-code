@@ -7,7 +7,7 @@ $OutputEncoding = [System.Text.Encoding]::UTF8
 # 检测架构
 $arch = $env:PROCESSOR_ARCHITECTURE
 if ($arch -ne "AMD64" -and $arch -ne "ARM64") {
-    Write-Host "Unsupported architecture: $arch" -ForegroundColor Red
+    Write-Error "Unsupported architecture: $arch"
     exit 1
 }
 
@@ -20,14 +20,17 @@ Write-Host "Downloading $filename..."
 try {
     Invoke-WebRequest -Uri $url -OutFile $tmpFile -UseBasicParsing
 } catch {
-    Write-Host "Download failed: $_" -ForegroundColor Red
+    Write-Error "Download failed: $_"
     exit 1
 }
 
 Write-Host "Starting configuration tool..."
 # 使用 Start-Process -NoNewWindow 让 exe 直接继承控制台句柄，
 # 避免通过 PowerShell 管道传输输出（否则 ANSI 颜色和交互式 TUI 无法正常显示）
-Start-Process -FilePath $tmpFile -NoNewWindow -Wait
+$process = Start-Process -FilePath $tmpFile -NoNewWindow -Wait -PassThru
+$exitCode = $process.ExitCode
 
 Remove-Item -Force $tmpFile -ErrorAction SilentlyContinue
-exit
+if ($exitCode -ne 0) {
+    throw "Configuration tool failed with exit code $exitCode"
+}

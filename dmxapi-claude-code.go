@@ -18,7 +18,6 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -615,46 +614,89 @@ func detectShellProfile(goos string) shellProfile {
 	}
 }
 
-// setEnvVarsWindows 在 Windows 上批量设置用户环境变量（使用 SETX 并行执行）
+// setEnvVarsWindows 在 Windows 上批量设置用户环境变量（写入后立即校验）
 func setEnvVarsWindows(vars map[string]string) error {
-	var wg sync.WaitGroup
-	errChan := make(chan error, len(vars))
-
 	for key, value := range vars {
 		if value == "" {
 			continue
 		}
-		wg.Add(1)
-		go func(k, v string) {
-			defer wg.Done()
-			var err error
-			if len(v) > 900 {
-				// setx 有 1024 字节上限，超长值改用 REG ADD 直接写注册表
-				err = runCommand("REG", "ADD", `HKCU\Environment`, "/V", k, "/T", "REG_SZ", "/D", v, "/F")
-				if err != nil {
-					errChan <- fmt.Errorf("设置环境变量 %s 失败（token 过长，注册表写入错误）：%v - 请重启终端后重试，或以管理员权限运行", k, err)
-					return
-				}
-			} else {
-				// 普通路径：使用 setx
-				err = runCommand("setx", k, v)
-				if err != nil {
-					errChan <- fmt.Errorf("设置环境变量 %s 失败: %v", k, err)
-				}
-			}
-		}(key, value)
-	}
-
-	wg.Wait()
-	close(errChan)
-
-	// 检查是否有错误
-	for err := range errChan {
-		if err != nil {
+		if err := setAndVerifyUserEnv(key, value); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+type userEnvGetter func(string) (string, bool, error)
+
+type userEnvSetter func(string, string) error
+
+type userEnvRemover func(string) error
+
+func setAndVerifyUserEnv(key, value string) error {
+	return setAndVerifyUserEnvWithOps(key, value, setUserEnv, getUserEnv)
+}
+
+func setAndVerifyUserEnvWithOps(key, value string, setFn userEnvSetter, getFn userEnvGetter) error {
+	if err := setFn(key, value); err != nil {
+		return fmt.Errorf("设置环境变量 %s 失败: %v", key, err)
+	}
+	actual, exists, err := getFn(key)
+	if err != nil {
+		return fmt.Errorf("校验环境变量 %s 失败: %v", key, err)
+	}
+	if !exists {
+		return fmt.Errorf("校验环境变量 %s 失败: 变量未写入 Windows 用户环境变量", key)
+	}
+	if actual != value {
+		return fmt.Errorf("校验环境变量 %s 失败: 期望 %q，实际 %q", key, value, actual)
+	}
+	return nil
+}
+
+func setUserEnv(key, value string) error {
+	if len(value) > 900 {
+		return runCommand("REG", "ADD", `HKCU\Environment`, "/V", key, "/T", "REG_SZ", "/D", value, "/F")
+	}
+	return runCommand("setx", key, value)
+}
+
+func getUserEnv(key string) (string, bool, error) {
+	cmd := exec.Command("REG", "QUERY", `HKCU\Environment`, "/V", key)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		trimmed := strings.TrimSpace(string(output))
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+			if strings.Contains(trimmed, "Unable to find") || strings.Contains(trimmed, "找不到") {
+				return "", false, nil
+			}
+		}
+		if trimmed != "" {
+			return "", false, fmt.Errorf("%v: %s", err, trimmed)
+		}
+		return "", false, err
+	}
+	return parseRegQueryValue(key, output)
+}
+
+func parseRegQueryValue(key string, output []byte) (string, bool, error) {
+	lines := strings.Split(strings.ReplaceAll(string(output), "\r\n", "\n"), "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		fields := strings.Fields(trimmed)
+		if len(fields) < 3 || !strings.EqualFold(fields[0], key) {
+			continue
+		}
+		parts := strings.SplitN(trimmed, fields[1], 2)
+		if len(parts) != 2 {
+			return "", false, fmt.Errorf("未能从 REG QUERY 输出中解析 %s", key)
+		}
+		return strings.TrimLeft(parts[1], " \t"), true, nil
+	}
+	return "", false, fmt.Errorf("未能从 REG QUERY 输出中解析 %s", key)
 }
 
 // setEnvVarsUnix 在 Unix 系统上批量设置环境变量（一次文件读写）
@@ -1570,17 +1612,25 @@ func removeEnvVarUnix(key string) error {
 
 // removeEnvVarWindows 从 Windows 用户环境变量中删除指定变量
 func removeEnvVarWindows(key string) error {
-	// 优先用 REG DELETE 删除注册表用户变量
-	err := runCommand("REG", "DELETE", `HKCU\Environment`, "/V", key, "/F")
+	return removeAndVerifyUserEnvWithOps(key, removeUserEnv, getUserEnv)
+}
+
+func removeAndVerifyUserEnvWithOps(key string, removeFn userEnvRemover, getFn userEnvGetter) error {
+	if err := removeFn(key); err != nil {
+		return fmt.Errorf("删除 %s 失败: %v", key, err)
+	}
+	_, exists, err := getFn(key)
 	if err != nil {
-		// 降级：setx 设置为空（Windows 下可能不完全清除，打印警告）
-		setxErr := runCommand("setx", key, "")
-		printWarning(fmt.Sprintf("无法完全清除 %s，请手动在系统环境变量中删除该项", key))
-		if setxErr != nil {
-			return fmt.Errorf("删除 %s 失败: REG DELETE 和 setx 均出错", key)
-		}
+		return fmt.Errorf("校验删除 %s 失败: %v", key, err)
+	}
+	if exists {
+		return fmt.Errorf("校验删除 %s 失败: 变量仍存在于 Windows 用户环境变量中", key)
 	}
 	return nil
+}
+
+func removeUserEnv(key string) error {
+	return runCommand("REG", "DELETE", `HKCU\Environment`, "/V", key, "/F")
 }
 
 // wslContentMatches 判断 /proc/version 文件内容是否表明运行在 WSL 环境。
@@ -1603,9 +1653,15 @@ func isWSL() bool {
 // runCommand 执行命令
 func runCommand(name string, args ...string) error {
 	cmd := exec.Command(name, args...)
-	cmd.Stdout = nil
-	cmd.Stderr = nil
-	return cmd.Run()
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(string(output))
+	if trimmed == "" {
+		return err
+	}
+	return fmt.Errorf("%v: %s", err, trimmed)
 }
 
 // ==================== API 验证 ====================

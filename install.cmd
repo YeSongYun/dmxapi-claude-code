@@ -22,10 +22,10 @@ if errorlevel 1 goto :download_failed
 
 echo Starting configuration tool...
 "%TMP_FILE%"
+set EXIT_CODE=%ERRORLEVEL%
 
 del /f "%TMP_FILE%" 2>nul
-endlocal
-goto :eof
+endlocal & exit /b %EXIT_CODE%
 
 :download_failed
 echo Download failed. Please check your network or download manually:

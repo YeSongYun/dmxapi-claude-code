@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -515,6 +517,165 @@ func TestClearClaudeSettingsManagedKeys(t *testing.T) {
 			t.Fatal("expected nil output when nothing removed")
 		}
 	})
+}
+
+func TestRunCommandIncludesCombinedOutput(t *testing.T) {
+	err := runCommand("/bin/sh", "-c", "printf 'boom'; printf ' fail' 1>&2; exit 9")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "boom") || !strings.Contains(msg, "fail") {
+		t.Fatalf("expected combined output in error, got %q", msg)
+	}
+}
+
+func TestSetAndVerifyUserEnvWithOps(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		store := map[string]string{}
+		err := setAndVerifyUserEnvWithOps("ANTHROPIC_MODEL", "claude-sonnet-4-6-cc",
+			func(key, value string) error {
+				store[key] = value
+				return nil
+			},
+			func(key string) (string, bool, error) {
+				v, ok := store[key]
+				return v, ok, nil
+			},
+		)
+		if err != nil {
+			t.Fatalf("expected success, got %v", err)
+		}
+	})
+
+	t.Run("set failure", func(t *testing.T) {
+		err := setAndVerifyUserEnvWithOps("ANTHROPIC_MODEL", "claude-sonnet-4-6-cc",
+			func(key, value string) error {
+				return fmt.Errorf("access denied")
+			},
+			func(key string) (string, bool, error) {
+				return "", false, nil
+			},
+		)
+		if err == nil || !strings.Contains(err.Error(), "设置环境变量 ANTHROPIC_MODEL 失败") {
+			t.Fatalf("expected set failure, got %v", err)
+		}
+	})
+
+	t.Run("verify missing", func(t *testing.T) {
+		err := setAndVerifyUserEnvWithOps("ANTHROPIC_MODEL", "claude-sonnet-4-6-cc",
+			func(key, value string) error { return nil },
+			func(key string) (string, bool, error) { return "", false, nil },
+		)
+		if err == nil || !strings.Contains(err.Error(), "变量未写入 Windows 用户环境变量") {
+			t.Fatalf("expected verify missing failure, got %v", err)
+		}
+	})
+
+	t.Run("verify mismatch", func(t *testing.T) {
+		err := setAndVerifyUserEnvWithOps("ANTHROPIC_MODEL", "claude-sonnet-4-6-cc",
+			func(key, value string) error { return nil },
+			func(key string) (string, bool, error) { return "wrong", true, nil },
+		)
+		if err == nil || !strings.Contains(err.Error(), "期望 \"claude-sonnet-4-6-cc\"，实际 \"wrong\"") {
+			t.Fatalf("expected verify mismatch failure, got %v", err)
+		}
+	})
+}
+
+func TestRemoveAndVerifyUserEnvWithOps(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		store := map[string]string{"ANTHROPIC_MODEL": "claude-sonnet-4-6-cc"}
+		err := removeAndVerifyUserEnvWithOps("ANTHROPIC_MODEL",
+			func(key string) error {
+				delete(store, key)
+				return nil
+			},
+			func(key string) (string, bool, error) {
+				v, ok := store[key]
+				return v, ok, nil
+			},
+		)
+		if err != nil {
+			t.Fatalf("expected success, got %v", err)
+		}
+	})
+
+	t.Run("remove failure", func(t *testing.T) {
+		err := removeAndVerifyUserEnvWithOps("ANTHROPIC_MODEL",
+			func(key string) error { return fmt.Errorf("registry locked") },
+			func(key string) (string, bool, error) { return "", false, nil },
+		)
+		if err == nil || !strings.Contains(err.Error(), "删除 ANTHROPIC_MODEL 失败") {
+			t.Fatalf("expected remove failure, got %v", err)
+		}
+	})
+
+	t.Run("verify still exists", func(t *testing.T) {
+		err := removeAndVerifyUserEnvWithOps("ANTHROPIC_MODEL",
+			func(key string) error { return nil },
+			func(key string) (string, bool, error) { return "claude-sonnet-4-6-cc", true, nil },
+		)
+		if err == nil || !strings.Contains(err.Error(), "变量仍存在于 Windows 用户环境变量中") {
+			t.Fatalf("expected verify still exists failure, got %v", err)
+		}
+	})
+}
+
+func TestParseRegQueryValue(t *testing.T) {
+	value, exists, err := parseRegQueryValue("ANTHROPIC_AUTH_TOKEN", []byte("\r\nHKEY_CURRENT_USER\\Environment\r\n    ANTHROPIC_AUTH_TOKEN    REG_SZ    token with spaces\r\n"))
+	if err != nil {
+		t.Fatalf("expected success, got %v", err)
+	}
+	if !exists {
+		t.Fatal("expected value to exist")
+	}
+	if value != "token with spaces" {
+		t.Fatalf("got %q, want %q", value, "token with spaces")
+	}
+
+	_, _, err = parseRegQueryValue("ANTHROPIC_AUTH_TOKEN", []byte("HKEY_CURRENT_USER\\Environment\r\n"))
+	if err == nil {
+		t.Fatal("expected parse failure")
+	}
+}
+
+func TestInstallScriptsExposeWindowsCompatibilityFixes(t *testing.T) {
+	ps1, err := os.ReadFile("install.ps1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ps1Content := string(ps1)
+	for _, want := range []string{"-PassThru", "$process.ExitCode", "throw \"Configuration tool failed with exit code $exitCode\""} {
+		if !strings.Contains(ps1Content, want) {
+			t.Fatalf("install.ps1 missing %q", want)
+		}
+	}
+	if strings.Contains(ps1Content, "\nexit\n") || strings.HasSuffix(ps1Content, "\nexit") {
+		t.Fatal("install.ps1 should not end with unconditional exit")
+	}
+
+	cmdBytes, err := os.ReadFile("install.cmd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmdContent := string(cmdBytes)
+	for _, want := range []string{"set EXIT_CODE=%ERRORLEVEL%", "endlocal & exit /b %EXIT_CODE%"} {
+		if !strings.Contains(cmdContent, want) {
+			t.Fatalf("install.cmd missing %q", want)
+		}
+	}
+	if !bytes.Contains(cmdBytes, []byte("\r\n")) {
+		t.Fatal("install.cmd should use CRLF line endings")
+	}
+
+	readme, err := os.ReadFile("README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(readme), "-o \"%TEMP%\\install.cmd\" && call \"%TEMP%\\install.cmd\"") {
+		t.Fatal("README Windows CMD example should quote and call install.cmd")
+	}
 }
 
 func TestStripJSONC(t *testing.T) {
