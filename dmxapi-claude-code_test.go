@@ -601,23 +601,36 @@ func TestRemoveAndVerifyUserEnvWithOps(t *testing.T) {
 		}
 	})
 
-	t.Run("remove failure", func(t *testing.T) {
+	// removeFn 报错但变量已不存在 → 目标达成，返回成功
+	t.Run("remove failure but already gone", func(t *testing.T) {
 		err := removeAndVerifyUserEnvWithOps("ANTHROPIC_MODEL",
 			func(key string) error { return fmt.Errorf("registry locked") },
 			func(key string) (string, bool, error) { return "", false, nil },
+		)
+		if err != nil {
+			t.Fatalf("expected success (variable already gone), got %v", err)
+		}
+	})
+
+	// removeFn 报错且变量仍存在 → 返回删除失败
+	t.Run("remove failure and still exists", func(t *testing.T) {
+		err := removeAndVerifyUserEnvWithOps("ANTHROPIC_MODEL",
+			func(key string) error { return fmt.Errorf("registry locked") },
+			func(key string) (string, bool, error) { return "claude-sonnet-4-6-cc", true, nil },
 		)
 		if err == nil || !strings.Contains(err.Error(), "删除 ANTHROPIC_MODEL 失败") {
 			t.Fatalf("expected remove failure, got %v", err)
 		}
 	})
 
-	t.Run("verify still exists", func(t *testing.T) {
+	// removeFn 成功但变量仍存在 → 返回删除失败
+	t.Run("remove ok but still exists", func(t *testing.T) {
 		err := removeAndVerifyUserEnvWithOps("ANTHROPIC_MODEL",
 			func(key string) error { return nil },
 			func(key string) (string, bool, error) { return "claude-sonnet-4-6-cc", true, nil },
 		)
-		if err == nil || !strings.Contains(err.Error(), "变量仍存在于 Windows 用户环境变量中") {
-			t.Fatalf("expected verify still exists failure, got %v", err)
+		if err == nil || !strings.Contains(err.Error(), "删除 ANTHROPIC_MODEL 失败") {
+			t.Fatalf("expected still exists failure, got %v", err)
 		}
 	})
 }

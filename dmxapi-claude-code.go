@@ -665,12 +665,11 @@ func getUserEnv(key string) (string, bool, error) {
 	cmd := exec.Command("REG", "QUERY", `HKCU\Environment`, "/V", key)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		trimmed := strings.TrimSpace(string(output))
+		// REG QUERY 退出码 1 = 变量不存在（不依赖文字，兼容所有系统语言和编码）
 		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
-			if strings.Contains(trimmed, "Unable to find") || strings.Contains(trimmed, "找不到") {
-				return "", false, nil
-			}
+			return "", false, nil
 		}
+		trimmed := strings.TrimSpace(string(output))
 		if trimmed != "" {
 			return "", false, fmt.Errorf("%v: %s", err, trimmed)
 		}
@@ -1424,17 +1423,17 @@ func clearAllConfig() {
 
 	switch runtime.GOOS {
 	case "windows":
-		errCount := 0
+		var regFailures []string
 		for _, key := range allEnvVarKeys {
 			if err := removeEnvVarWindows(key); err != nil {
-				errCount++
+				regFailures = append(regFailures, fmt.Sprintf("%s: %v", key, err))
 			}
 		}
-		if errCount > 0 {
+		if len(regFailures) > 0 {
 			results = append(results, clearResult{
 				Location: "Windows 注册表",
 				Status:   "failed",
-				Message:  fmt.Sprintf("%d 个变量清除失败", errCount),
+				Message:  fmt.Sprintf("%d 个变量清除失败\n      %s", len(regFailures), strings.Join(regFailures, "\n      ")),
 			})
 		} else {
 			results = append(results, clearResult{
@@ -1616,21 +1615,44 @@ func removeEnvVarWindows(key string) error {
 }
 
 func removeAndVerifyUserEnvWithOps(key string, removeFn userEnvRemover, getFn userEnvGetter) error {
-	if err := removeFn(key); err != nil {
-		return fmt.Errorf("删除 %s 失败: %v", key, err)
-	}
-	_, exists, err := getFn(key)
-	if err != nil {
-		return fmt.Errorf("校验删除 %s 失败: %v", key, err)
+	removeErr := removeFn(key)
+	// 无论 removeFn 是否报错，都通过 getFn 验证最终状态
+	_, exists, verifyErr := getFn(key)
+	if verifyErr != nil {
+		if removeErr != nil {
+			return fmt.Errorf("删除 %s 失败: %v", key, removeErr)
+		}
+		return fmt.Errorf("校验删除 %s 失败: %v", key, verifyErr)
 	}
 	if exists {
-		return fmt.Errorf("校验删除 %s 失败: 变量仍存在于 Windows 用户环境变量中", key)
+		// 变量仍在：以 removeFn 的错误为准（更直接）
+		if removeErr != nil {
+			return fmt.Errorf("删除 %s 失败: %v", key, removeErr)
+		}
+		return fmt.Errorf("删除 %s 失败: 变量仍存在于 Windows 用户环境变量中", key)
 	}
+	// 变量已不存在：无论 removeFn 是否报错，目标达成
 	return nil
 }
 
 func removeUserEnv(key string) error {
-	return runCommand("REG", "DELETE", `HKCU\Environment`, "/V", key, "/F")
+	// 优先用 PowerShell .NET API：变量不存在时也不报错，兼容所有 Windows 语言版本和编码
+	psKey := strings.ReplaceAll(key, "'", "''") // 转义单引号（防御性处理）
+	script := fmt.Sprintf(`[Environment]::SetEnvironmentVariable('%s', $null, 'User')`, psKey)
+	if err := runCommand("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script); err == nil {
+		return nil
+	}
+	// PowerShell 不可用时回退到 REG DELETE
+	cmd := exec.Command("REG", "DELETE", `HKCU\Environment`, "/V", key, "/F")
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(string(output))
+	if trimmed != "" {
+		return fmt.Errorf("%v: %s", err, trimmed)
+	}
+	return err
 }
 
 // wslContentMatches 判断 /proc/version 文件内容是否表明运行在 WSL 环境。
