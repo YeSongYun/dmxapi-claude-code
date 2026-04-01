@@ -109,7 +109,7 @@ const (
 	styleBold = "\033[1m"
 	styleDim  = "\033[2m"
 	// 版本号
-	appVersion = "1.5.7"
+	appVersion = "1.5.8"
 	// 统一盒子内容宽度（不含左右边框字符）
 	boxWidth = 60
 )
@@ -1881,6 +1881,7 @@ func selectFixOption() int {
 		{"2", "修改 Key", "API Key 有问题"},
 		{"3", "都修改", "URL 和 Key 都有问题"},
 		{"4", "修改模型名", "模型名称可能不正确"},
+		{"5", "强制配置", "跳过验证，直接保存当前配置"},
 	})
 }
 
@@ -2972,12 +2973,17 @@ func main() {
 					cfg.AuthToken = inputNewAuthToken(hostname)
 				case 4: // 修改模型名
 					cfg.Model = runL2Menu("默认模型", cfg.Model)
+				case 5: // 强制配置，跳过验证
+					printWarning("已跳过 API 验证，将直接保存当前配置")
+					fmt.Println()
+					goto saveConfig
 				}
 				fmt.Println()
 				continue
 			}
 			break
 		}
+	saveConfig:
 		printSuccess("API 连接验证成功!")
 		// 提前询问附加配置意向
 		fmt.Println()
