@@ -54,6 +54,13 @@ const (
 	defaultSonnetModel = "claude-sonnet-4-6-cc"
 	defaultOpusModel   = "claude-opus-4-6-cc"
 
+	// dmxapi 推荐配置（一键模式使用）
+	recommendedBaseURL     = "https://www.dmxapi.cn"
+	recommendedModel       = "claude-opus-4-7-cc"
+	recommendedHaikuModel  = "claude-haiku-4-5-20251001-cc"
+	recommendedSonnetModel = "claude-sonnet-4-6-cc"
+	recommendedOpusModel   = "claude-opus-4-7-cc"
+
 	fixedDisableExperimentalBetas = "1"
 )
 
@@ -1861,16 +1868,25 @@ func getNewAuthToken(existing, hostname string) string {
 	}
 }
 
-// selectConfigMode 选择配置模式
-// 返回值: 1 = 从头配置, 2 = 仅配置模型, 3 = 解决 400 报错, 4 = 配置实验性功能, 5 = 配置 VSCode 插件, 6 = 清除所有配置
+// selectTopMode 选择顶层模式
+// 返回值: 1 = dmxapi 推荐配置, 2 = 自定义配置, 3 = 清除所有配置
+func selectTopMode() int {
+	return runItemMenu("请选择配置方式", []MenuItem{
+		{"1", "dmxapi 推荐配置", "Claude Opus 4.7 一键配置"},
+		{"2", "自定义配置", "手动配置 URL / Token / 模型等"},
+		{"3", "清除所有配置", "移除所有已保存的配置"},
+	})
+}
+
+// selectConfigMode 选择自定义配置的子模式
+// 返回值: 1 = 从头配置, 2 = 仅配置模型, 3 = 解决 400 报错, 4 = 配置实验性功能, 5 = 配置 VSCode 插件
 func selectConfigMode() int {
-	return runItemMenu("配置模式选择", []MenuItem{
+	return runItemMenu("自定义配置", []MenuItem{
 		{"1", "从头配置", "配置 URL、Token 和模型"},
 		{"2", "仅配置模型", "跳过 URL 和 Token 配置"},
 		{"3", "解决 400 报错", "禁用实验性请求头"},
 		{"4", "配置实验性功能", "启用/禁用 Agent Teams"},
 		{"5", "配置 VSCode 插件", "写入 VSCode settings.json"},
-		{"6", "清除所有配置", "移除所有已保存的配置"},
 	})
 }
 
@@ -2587,6 +2603,82 @@ func saveConfig(cfg Config) error {
 	return nil
 }
 
+// runRecommendedConfig 推荐配置一键流程：只输入 key，其他参数使用 dmxapi 推荐默认值，
+// 并自动写入 Claude settings、系统环境变量与 VSCode settings.json。
+func runRecommendedConfig() {
+	printSectionHeader("dmxapi 推荐配置 (Claude Opus 4.7)")
+	fmt.Println()
+	printInfo(fmt.Sprintf("Base URL:         %s", recommendedBaseURL))
+	printInfo(fmt.Sprintf("默认模型:         %s", recommendedModel))
+	printInfo(fmt.Sprintf("Haiku 模型:       %s", recommendedHaikuModel))
+	printInfo(fmt.Sprintf("Sonnet 模型:      %s", recommendedSonnetModel))
+	printInfo(fmt.Sprintf("Opus 模型:        %s", recommendedOpusModel))
+	printInfo("将自动禁用实验性请求头，并配置 VSCode 插件")
+	fmt.Println()
+
+	existing := loadExistingConfig()
+	hostname := extractHost(recommendedBaseURL)
+
+	authToken := getNewAuthToken(existing.AuthToken, hostname)
+
+	cfg := Config{
+		BaseURL:     recommendedBaseURL,
+		AuthToken:   authToken,
+		Model:       recommendedModel,
+		HaikuModel:  recommendedHaikuModel,
+		SonnetModel: recommendedSonnetModel,
+		OpusModel:   recommendedOpusModel,
+	}
+
+	fmt.Println()
+	for {
+		if err := validateAPIConnection(cfg.BaseURL, cfg.AuthToken, cfg.Model); err != nil {
+			printError(fmt.Sprintf("API 连接验证失败: %v", err))
+			fmt.Println()
+			printInfo("当前配置:")
+			fmt.Printf("  Base URL: %s\n", cfg.BaseURL)
+			fmt.Printf("  API Key:  %s\n", cfg.AuthToken)
+			fmt.Println()
+
+			choice := runItemMenu("API 验证失败，如何处理", []MenuItem{
+				{"1", "修改 Key", "重新输入 API Key"},
+				{"2", "强制保存", "跳过验证直接保存当前配置"},
+			})
+			if choice == 1 {
+				cfg.AuthToken = inputNewAuthToken(hostname)
+				fmt.Println()
+				continue
+			}
+			printWarning("已跳过 API 验证，将直接保存当前配置")
+			break
+		}
+		printSuccess("API 连接验证成功!")
+		break
+	}
+
+	fmt.Println()
+	err := runWithSpinner("正在保存配置...", func() error {
+		return saveConfig(cfg)
+	})
+	if err != nil {
+		printError(fmt.Sprintf("保存配置失败: %v", err))
+		os.Exit(1)
+	}
+	printSuccess("保存成功!")
+
+	fmt.Println()
+	err = runWithSpinner("正在配置 VSCode 插件...", func() error {
+		return saveVSCodeConfig(cfg)
+	})
+	if err != nil {
+		printWarning(fmt.Sprintf("VSCode 配置写入失败: %v", err))
+	} else {
+		printSuccess("VSCode 插件配置成功!")
+	}
+
+	printSummary(cfg)
+}
+
 // configureAgentTeams 配置实验性 Agent Teams 功能环境变量。
 // exitOnDone=true 时末尾显示"按回车键退出"（独立运行模式4时使用）；
 // 嵌入模式1后置步骤时传 false，由 main 统一处理退出。
@@ -2920,7 +3012,21 @@ func main() {
 	// 检查版本更新（失败则静默跳过）
 	checkForUpdates()
 
-	// 选择配置模式
+	// 顶层配置方式选择
+	switch selectTopMode() {
+	case 1:
+		runRecommendedConfig()
+		fmt.Println()
+		styledInput("按回车键退出")
+		return
+	case 3:
+		clearAllConfig()
+		fmt.Println()
+		styledInput("按回车键退出")
+		return
+	}
+
+	// 顶层选择 = 2（自定义配置），进入原有子菜单
 	configMode := selectConfigMode()
 
 	// 加载现有配置
@@ -3000,11 +3106,6 @@ func main() {
 		return
 	} else if configMode == 5 {
 		configureVSCode(cfg, true)
-		return
-	} else if configMode == 6 {
-		clearAllConfig()
-		fmt.Println()
-		styledInput("按回车键退出")
 		return
 	} else {
 		// 仅配置模型模式
