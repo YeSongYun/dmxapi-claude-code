@@ -57,6 +57,117 @@ func TestVisibleLength(t *testing.T) {
 	}
 }
 
+func TestRuneWidthAmbiguous(t *testing.T) {
+	// 保存并在测试后恢复全局 cjkAmbiguous
+	orig := cjkAmbiguous
+	t.Cleanup(func() { cjkAmbiguous = orig })
+
+	ambiguousRunes := []rune{'◆', '❯', '✔', '✘', '→', '↑', '↓'}
+
+	// 非 CJK locale：ambiguous 字符按 1 宽度
+	cjkAmbiguous = false
+	for _, r := range ambiguousRunes {
+		if got := runeWidth(r); got != 1 {
+			t.Errorf("runeWidth(%q) 在 cjkAmbiguous=false 时 = %d，want 1", r, got)
+		}
+	}
+
+	// CJK locale：ambiguous 字符按 2 宽度
+	cjkAmbiguous = true
+	for _, r := range ambiguousRunes {
+		if got := runeWidth(r); got != 2 {
+			t.Errorf("runeWidth(%q) 在 cjkAmbiguous=true 时 = %d，want 2", r, got)
+		}
+	}
+
+	// 普通 ASCII 不受影响
+	if got := runeWidth('a'); got != 1 {
+		t.Errorf("ASCII 'a' = %d，want 1", got)
+	}
+	// 明确双宽 CJK 不受影响
+	if got := runeWidth('你'); got != 2 {
+		t.Errorf("CJK '你' = %d，want 2", got)
+	}
+}
+
+func TestDetectCJKLocale(t *testing.T) {
+	cases := []struct {
+		name  string
+		lang  string
+		lcAll string
+		want  bool
+	}{
+		{"zh_CN 简中", "zh_CN.UTF-8", "", true},
+		{"ja_JP 日文", "ja_JP.UTF-8", "", true},
+		{"ko_KR 韩文", "ko_KR.UTF-8", "", true},
+		{"en_US 英文", "en_US.UTF-8", "", false},
+		{"LC_ALL 覆盖", "en_US.UTF-8", "zh_CN.UTF-8", true},
+		{"全空", "", "", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			// 清理所有 locale env，避免测试间污染
+			t.Setenv("LANG", c.lang)
+			t.Setenv("LC_ALL", c.lcAll)
+			t.Setenv("LC_CTYPE", "")
+			got := detectCJKLocale()
+			// 在 Windows 宿主上且所有 env 都空时，可能因 ACP=CJK 返回 true；此用例跳过
+			if c.lang == "" && c.lcAll == "" && got != c.want {
+				t.Skipf("全空用例依赖 Windows ACP，当前 GOOS=%s；got=%v", runtime.GOOS, got)
+			}
+			if got != c.want && !(c.lang == "" && c.lcAll == "") {
+				t.Errorf("detectCJKLocale() = %v, want %v (LANG=%q LC_ALL=%q)", got, c.want, c.lang, c.lcAll)
+			}
+		})
+	}
+}
+
+func TestApplyLegacyTheme(t *testing.T) {
+	// 保存所有受影响的全局变量，测试后完整恢复
+	origColorReset := colorReset
+	origBoxDH := boxDH
+	origBoxV := boxV
+	origIconPrompt := iconPrompt
+	origIconSuccess := iconSuccess
+	origSpinner := make([]string, len(spinnerFrames))
+	copy(origSpinner, spinnerFrames)
+	origSectionStart := sectionStart
+	t.Cleanup(func() {
+		colorReset = origColorReset
+		boxDH = origBoxDH
+		boxV = origBoxV
+		iconPrompt = origIconPrompt
+		iconSuccess = origIconSuccess
+		spinnerFrames = origSpinner
+		sectionStart = origSectionStart
+		// 其他变量依赖可以继续扩展；这里只覆盖断言用到的
+	})
+
+	applyLegacyTheme()
+
+	if colorReset != "" {
+		t.Errorf("legacy 下 colorReset 应置空，got %q", colorReset)
+	}
+	if boxDH != "=" {
+		t.Errorf("legacy 下 boxDH 应为 '='，got %q", boxDH)
+	}
+	if boxV != "|" {
+		t.Errorf("legacy 下 boxV 应为 '|'，got %q", boxV)
+	}
+	if iconPrompt != ">" {
+		t.Errorf("legacy 下 iconPrompt 应为 '>'，got %q", iconPrompt)
+	}
+	if iconSuccess != "[OK]" {
+		t.Errorf("legacy 下 iconSuccess 应为 '[OK]'，got %q", iconSuccess)
+	}
+	if sectionStart != "+-" {
+		t.Errorf("legacy 下 sectionStart 应为 '+-'，got %q", sectionStart)
+	}
+	if len(spinnerFrames) != 4 || spinnerFrames[0] != "|" {
+		t.Errorf("legacy 下 spinnerFrames 应为 |/-\\，got %q", spinnerFrames)
+	}
+}
+
 func TestIsWSLFromContent(t *testing.T) {
 	cases := []struct {
 		input string

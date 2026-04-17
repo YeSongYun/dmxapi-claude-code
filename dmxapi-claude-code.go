@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -100,8 +101,14 @@ var allEnvVarKeys = []string{
 	envAgentTeams,
 }
 
-// 颜色代码
+// 版本号 / 盒子宽度保持 const（运行时不会变）
 const (
+	appVersion = "1.5.8"
+	boxWidth   = 60
+)
+
+// 颜色代码（改为 var 以便 applyLegacyTheme 在无 VT 的 Windows 控制台上置空）
+var (
 	colorReset  = "\033[0m"
 	colorRed    = "\033[31m"
 	colorGreen  = "\033[32m"
@@ -121,11 +128,110 @@ const (
 	// 文字样式
 	styleBold = "\033[1m"
 	styleDim  = "\033[2m"
-	// 版本号
-	appVersion = "1.5.8"
-	// 统一盒子内容宽度（不含左右边框字符）
-	boxWidth = 60
 )
+
+// 视觉元素（图标 / 盒形 / spinner），legacy 模式下替换为 ASCII 等价物
+var (
+	iconSuccess = "✔"
+	iconError   = "✘"
+	iconWarn    = "⚠"
+	iconInfo    = "→"
+	iconTip     = "◆"
+	iconPrompt  = "❯"
+	iconCheck   = "✓"
+	iconEdit    = "✏"
+	iconNavUp   = "↑"
+	iconNavDown = "↓"
+
+	spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+	// 双线盒（printBox 用）
+	boxDTL, boxDTR, boxDBL, boxDBR = "╔", "╗", "╚", "╝"
+	boxDH, boxDV                   = "═", "║"
+	boxDML, boxDMR                 = "╠", "╣"
+
+	// 单线圆角盒（菜单用）
+	boxTL, boxTR, boxBL, boxBR = "╭", "╮", "╰", "╯"
+	boxH, boxV                 = "─", "│"
+	boxML, boxMR               = "├", "┤"
+
+	// 节头前缀（printSectionHeader 用）
+	sectionStart = "┌─"
+)
+
+// cjkAmbiguous 为 true 时，Unicode East Asian Ambiguous 宽度字符按 2 宽度渲染（CJK locale 习惯）
+var cjkAmbiguous bool
+
+// applyLegacyTheme 在无 VT 支持的控制台（如 Windows 7/8/老 Win10）下，
+// 把所有颜色置空、盒形/图标/spinner 换为 ASCII 等价物，避免打印乱码或方框。
+func applyLegacyTheme() {
+	colorReset, colorRed, colorGreen, colorYellow, colorBlue, colorCyan = "", "", "", "", "", ""
+	colorBrightRed, colorBrightGreen, colorBrightYellow = "", "", ""
+	colorBrightBlue, colorBrightMagenta, colorBrightCyan, colorBrightWhite = "", "", "", ""
+	colorMagenta, colorWhite = "", ""
+	styleBold, styleDim = "", ""
+
+	boxDTL, boxDTR, boxDBL, boxDBR = "+", "+", "+", "+"
+	boxDH, boxDV = "=", "|"
+	boxDML, boxDMR = "+", "+"
+	boxTL, boxTR, boxBL, boxBR = "+", "+", "+", "+"
+	boxH, boxV = "-", "|"
+	boxML, boxMR = "+", "+"
+	sectionStart = "+-"
+
+	iconSuccess = "[OK]"
+	iconError = "[X]"
+	iconWarn = "[!]"
+	iconInfo = "->"
+	iconTip = "*"
+	iconPrompt = ">"
+	iconCheck = "*"
+	iconEdit = ">"
+	iconNavUp = "^"
+	iconNavDown = "v"
+
+	spinnerFrames = []string{"|", "/", "-", "\\"}
+}
+
+// detectCJKLocale 判断当前用户环境是否为 CJK locale（中日韩），用于 Ambiguous Width 渲染。
+// 优先检查 LC_ALL / LC_CTYPE / LANG；Windows 补充检测系统活动代码页。
+func detectCJKLocale() bool {
+	for _, envName := range []string{"LC_ALL", "LC_CTYPE", "LANG"} {
+		v := strings.ToLower(os.Getenv(envName))
+		if v == "" {
+			continue
+		}
+		if strings.HasPrefix(v, "zh") || strings.HasPrefix(v, "ja") || strings.HasPrefix(v, "ko") {
+			return true
+		}
+		// 只要确认有具体 locale 就以此为准，不再尝试 Windows ACP
+		return false
+	}
+	// 所有 env 变量都为空才 fallback 到 Windows ACP
+	if runtime.GOOS == "windows" {
+		switch getWindowsACP() {
+		case 936, 950, 932, 949:
+			return true
+		}
+	}
+	return false
+}
+
+// isAmbiguousWidth 判断一个 rune 是否落在 Unicode East Asian Ambiguous 宽度区间
+// （常用段覆盖 ◆ ❯ ✔ ↑↓ 等符号）。非详尽，但覆盖本工具所用字符。
+func isAmbiguousWidth(r rune) bool {
+	switch {
+	case r >= 0x2190 && r <= 0x21FF: // 箭头 ←→↑↓
+		return true
+	case r >= 0x25A0 && r <= 0x25FF: // 几何形状 ◆◇○●
+		return true
+	case r >= 0x2600 && r <= 0x26FF: // 杂项符号 ☀★⚠
+		return true
+	case r >= 0x2700 && r <= 0x27BF: // Dingbats ✔✘❯✂
+		return true
+	}
+	return false
+}
 
 // rawModeState 保存终端 raw 模式前的状态，用于 Ctrl+C 时恢复
 var rawModeState *term.State
@@ -157,27 +263,26 @@ func printColor(color, text string) {
 
 // printSuccess 打印成功信息
 func printSuccess(text string) {
-	fmt.Printf("%s%s✔%s %s\n", colorReset, colorBrightGreen, colorReset, text)
+	fmt.Printf("%s%s%s%s %s\n", colorReset, colorBrightGreen, iconSuccess, colorReset, text)
 }
 
 // printError 打印错误信息
 func printError(text string) {
-	fmt.Printf("%s%s✘%s %s%s%s\n", colorReset, colorBrightRed, colorReset, colorBrightRed, text, colorReset)
+	fmt.Printf("%s%s%s%s %s%s%s\n", colorReset, colorBrightRed, iconError, colorReset, colorBrightRed, text, colorReset)
 }
 
 // printWarning 打印警告信息
 func printWarning(text string) {
-	fmt.Printf("%s%s⚠%s %s%s%s\n", colorReset, colorBrightYellow, colorReset, colorBrightYellow, text, colorReset)
+	fmt.Printf("%s%s%s%s %s%s%s\n", colorReset, colorBrightYellow, iconWarn, colorReset, colorBrightYellow, text, colorReset)
 }
 
 // printInfo 打印信息
 func printInfo(text string) {
-	fmt.Printf("%s%s→%s %s\n", colorReset, colorBrightCyan, colorReset, text)
+	fmt.Printf("%s%s%s%s %s\n", colorReset, colorBrightCyan, iconInfo, colorReset, text)
 }
 
 // runWithSpinner 带旋转动画执行任务
 func runWithSpinner(message string, task func() error) error {
-	spinner := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 	done := make(chan bool, 1) // 带缓冲，防止 task panic 时 goroutine 阻塞
 	var err error
 
@@ -188,8 +293,8 @@ func runWithSpinner(message string, task func() error) error {
 			case <-done:
 				return
 			default:
-				fmt.Printf("\r  %s%s%s %s%s%s", styleBold+colorBrightCyan, spinner[i], colorReset, colorBrightWhite, message, colorReset)
-				i = (i + 1) % len(spinner)
+				fmt.Printf("\r  %s%s%s %s%s%s", styleBold+colorBrightCyan, spinnerFrames[i], colorReset, colorBrightWhite, message, colorReset)
+				i = (i + 1) % len(spinnerFrames)
 				time.Sleep(80 * time.Millisecond)
 			}
 		}
@@ -220,6 +325,10 @@ func runeWidth(r rune) int {
 		(r >= 0xFF01 && r <= 0xFF60) || // 全宽 ASCII + 全宽标点
 		(r >= 0xFFE0 && r <= 0xFFE6) || // 全宽货币符号等
 		(r >= 0x20000 && r <= 0x2FA1F) { // CJK 扩展 B~F + 兼容补充
+		return 2
+	}
+	// 在 CJK locale 下，East Asian Ambiguous 宽度字符按 2 宽度渲染（◆❯✔↑↓ 等）
+	if cjkAmbiguous && isAmbiguousWidth(r) {
 		return 2
 	}
 	return 1
@@ -288,28 +397,28 @@ func printLogo() {
 
 // printSectionHeader 打印章节标题
 func printSectionHeader(title string) {
-	fmt.Printf("\n%s┌─%s %s%s%s\n", colorBrightBlue, colorReset, styleBold, title, colorReset)
+	fmt.Printf("\n%s%s%s %s%s%s\n", colorBrightBlue, sectionStart, colorReset, styleBold, title, colorReset)
 }
 
 // printTip 打印提示信息
 func printTip(text string) {
-	fmt.Printf("  %s◆%s %s\n", colorBrightBlue, colorReset, text)
+	fmt.Printf("  %s%s%s %s\n", colorBrightBlue, iconTip, colorReset, text)
 }
 
 // printBox 打印双线边框盒子
 func printBox(title, titleColor string, lines []string) {
-	border := strings.Repeat("═", boxWidth)
-	fmt.Printf("╔%s╗\n", border)
+	border := strings.Repeat(boxDH, boxWidth)
+	fmt.Printf("%s%s%s\n", boxDTL, border, boxDTR)
 
 	// 标题居中
 	titleVisible := visibleLength(title)
 	padding := boxWidth - titleVisible
 	left := padding / 2
 	right := padding - left
-	fmt.Printf("║%s%s%s%s%s║\n",
-		strings.Repeat(" ", left), titleColor+styleBold, title, colorReset, strings.Repeat(" ", right))
+	fmt.Printf("%s%s%s%s%s%s%s\n",
+		boxDV, strings.Repeat(" ", left), titleColor+styleBold, title, colorReset, strings.Repeat(" ", right), boxDV)
 
-	fmt.Printf("╠%s╣\n", border)
+	fmt.Printf("%s%s%s\n", boxDML, border, boxDMR)
 
 	for _, line := range lines {
 		lineVisible := visibleLength(line)
@@ -317,10 +426,10 @@ func printBox(title, titleColor string, lines []string) {
 		if pad < 0 {
 			pad = 0
 		}
-		fmt.Printf("║  %s%s║\n", line, strings.Repeat(" ", pad))
+		fmt.Printf("%s  %s%s%s\n", boxDV, line, strings.Repeat(" ", pad), boxDV)
 	}
 
-	fmt.Printf("╚%s╝\n", border)
+	fmt.Printf("%s%s%s\n", boxDBL, border, boxDBR)
 }
 
 // MenuItem 菜单项
@@ -349,18 +458,18 @@ type modelTypeEntry struct {
 
 // printMenu 打印圆角边框菜单
 func printMenu(title string, items []MenuItem) {
-	border := strings.Repeat("─", boxWidth)
-	fmt.Printf("╭%s╮\n", border)
+	border := strings.Repeat(boxH, boxWidth)
+	fmt.Printf("%s%s%s\n", boxTL, border, boxTR)
 
 	// 标题居中
 	titleVisible := visibleLength(title)
 	padding := boxWidth - titleVisible
 	left := padding / 2
 	right := padding - left
-	fmt.Printf("│%s%s%s%s%s│\n",
-		strings.Repeat(" ", left), styleBold+colorBrightWhite, title, colorReset, strings.Repeat(" ", right))
+	fmt.Printf("%s%s%s%s%s%s%s\n",
+		boxV, strings.Repeat(" ", left), styleBold+colorBrightWhite, title, colorReset, strings.Repeat(" ", right), boxV)
 
-	fmt.Printf("├%s┤\n", border)
+	fmt.Printf("%s%s%s\n", boxML, border, boxMR)
 
 	for _, item := range items {
 		// 格式: │  [1]  主标签  暗色副描述  │
@@ -373,17 +482,17 @@ func printMenu(title string, items []MenuItem) {
 		if pad < 0 {
 			pad = 0
 		}
-		fmt.Printf("│  %s%s│\n", content, strings.Repeat(" ", pad))
+		fmt.Printf("%s  %s%s%s\n", boxV, content, strings.Repeat(" ", pad), boxV)
 	}
 
-	fmt.Printf("╰%s╯\n", border)
+	fmt.Printf("%s%s%s\n", boxBL, border, boxBR)
 }
 
 // ==================== 样式输入函数 ====================
 
 // styledInput 带样式提示符的文本输入
 func styledInput(label string) string {
-	fmt.Printf("  %s❯%s %s%s:%s ", colorBrightCyan, colorReset, styleBold, label, colorReset)
+	fmt.Printf("  %s%s%s %s%s:%s ", colorBrightCyan, iconPrompt, colorReset, styleBold, label, colorReset)
 	reader := bufio.NewReader(os.Stdin)
 	input, _ := reader.ReadString('\n')
 	return strings.TrimSpace(input)
@@ -391,7 +500,7 @@ func styledInput(label string) string {
 
 // styledPassword 带样式提示符的隐藏输入
 func styledPassword(label string) string {
-	fmt.Printf("  %s❯%s %s%s:%s ", colorBrightCyan, colorReset, styleBold, label, colorReset)
+	fmt.Printf("  %s%s%s %s%s:%s ", colorBrightCyan, iconPrompt, colorReset, styleBold, label, colorReset)
 	fd := int(syscall.Stdin)
 	if term.IsTerminal(fd) {
 		pw, err := term.ReadPassword(fd)
@@ -1650,10 +1759,13 @@ func removeAndVerifyUserEnvWithOps(key string, removeFn userEnvRemover, getFn us
 
 func removeUserEnv(key string) error {
 	// 优先用 PowerShell .NET API：变量不存在时也不报错，兼容所有 Windows 语言版本和编码
-	psKey := strings.ReplaceAll(key, "'", "''") // 转义单引号（防御性处理）
-	script := fmt.Sprintf(`[Environment]::SetEnvironmentVariable('%s', $null, 'User')`, psKey)
-	if err := runCommand("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script); err == nil {
-		return nil
+	// 先 LookPath 确认 powershell.exe 在 PATH 中，避免 Server Core 等精简环境下的无意义错误输出
+	if _, err := exec.LookPath("powershell"); err == nil {
+		psKey := strings.ReplaceAll(key, "'", "''") // 转义单引号（防御性处理）
+		script := fmt.Sprintf(`[Environment]::SetEnvironmentVariable('%s', $null, 'User')`, psKey)
+		if err := runCommand("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script); err == nil {
+			return nil
+		}
 	}
 	// PowerShell 不可用时回退到 REG DELETE
 	cmd := exec.Command("REG", "DELETE", `HKCU\Environment`, "/V", key, "/F")
@@ -1944,14 +2056,14 @@ func renderItemMenu(title string, items []MenuItem, selectedIdx int, linesPrinte
 	if linesPrinted > 0 {
 		fmt.Printf("\033[%dA", linesPrinted)
 	}
-	border := strings.Repeat("─", boxWidth)
-	fmt.Printf("╭%s╮\033[K\r\n", border)
+	border := strings.Repeat(boxH, boxWidth)
+	fmt.Printf("%s%s%s\033[K\r\n", boxTL, border, boxTR)
 	titleW := visibleLength(title)
 	lPad := (boxWidth - titleW) / 2
 	rPad := boxWidth - titleW - lPad
-	fmt.Printf("│%s%s%s%s%s│\033[K\r\n",
-		strings.Repeat(" ", lPad), styleBold+colorBrightWhite, title, colorReset, strings.Repeat(" ", rPad))
-	fmt.Printf("├%s┤\033[K\r\n", border)
+	fmt.Printf("%s%s%s%s%s%s%s\033[K\r\n",
+		boxV, strings.Repeat(" ", lPad), styleBold+colorBrightWhite, title, colorReset, strings.Repeat(" ", rPad), boxV)
+	fmt.Printf("%s%s%s\033[K\r\n", boxML, border, boxMR)
 	for i, item := range items {
 		labelW := visibleLength(item.Label)
 		descW := visibleLength(item.Desc)
@@ -1960,23 +2072,23 @@ func renderItemMenu(title string, items []MenuItem, selectedIdx int, linesPrinte
 			pad = 0
 		}
 		if i == selectedIdx {
-			fmt.Printf("│ %s❯ %s%s  %s%s%s%s│\033[K\r\n",
-				colorBrightCyan+styleBold,
+			fmt.Printf("%s %s%s %s%s  %s%s%s%s%s\033[K\r\n",
+				boxV, colorBrightCyan+styleBold, iconPrompt,
 				item.Label, colorReset,
 				colorBrightCyan, item.Desc, colorReset,
-				strings.Repeat(" ", pad))
+				strings.Repeat(" ", pad), boxV)
 		} else {
-			fmt.Printf("│ %s  %s%s  %s%s%s%s│\033[K\r\n",
-				styleDim,
+			fmt.Printf("%s %s  %s%s  %s%s%s%s%s\033[K\r\n",
+				boxV, styleDim,
 				item.Label, colorReset,
 				styleDim, item.Desc, colorReset,
-				strings.Repeat(" ", pad))
+				strings.Repeat(" ", pad), boxV)
 		}
 	}
-	fmt.Printf("╰%s╯\033[K\r\n", border)
+	fmt.Printf("%s%s%s\033[K\r\n", boxBL, border, boxBR)
 	fmt.Printf("\033[K\r\n")
-	fmt.Printf("  %s↑↓ 导航%s  %sEnter 确认%s\033[K\r\n",
-		styleDim, colorReset, styleDim, colorReset)
+	fmt.Printf("  %s%s%s 导航%s  %sEnter 确认%s\033[K\r\n",
+		styleDim, iconNavUp, iconNavDown, colorReset, styleDim, colorReset)
 	return len(items) + 6
 }
 
@@ -2025,8 +2137,13 @@ func runItemMenu(title string, items []MenuItem) int {
 
 // ==================== 交互式模型选择 ====================
 
-// enterRawMode 进入终端原始模式，返回恢复函数
+// enterRawMode 进入终端原始模式，返回恢复函数。
+// 在 legacy 控制台（如无 VT 支持的老版 Windows cmd）下主动返回错误，
+// 让菜单走数字输入降级分支，避免使用光标控制序列（\033[...）带来乱码。
 func enterRawMode() (restoreFn func(), err error) {
+	if legacyConsoleMode {
+		return nil, fmt.Errorf("legacy console: raw mode disabled")
+	}
 	fd := int(syscall.Stdin)
 	if !term.IsTerminal(fd) {
 		return nil, fmt.Errorf("not a terminal")
@@ -2059,7 +2176,8 @@ func readRawKey() KeyType {
 			term.Restore(int(syscall.Stdin), rawModeState)
 			fmt.Println()
 		}
-		os.Exit(0)
+		restoreConsole()
+		os.Exit(130)
 	case 0x1B: // ESC 序列（Linux/macOS/Windows Terminal）
 		if stdinBytesAvailable() == 0 {
 			return KeyEsc // 单独按下 ESC 键，无后续字节
@@ -2140,8 +2258,8 @@ func renderConfirmMenuCore(question string, labels [2]string, descs [2]string, s
 		fmt.Printf("\033[%dA", linesPrinted)
 	}
 	const innerW = 44
-	border := strings.Repeat("─", innerW)
-	fmt.Printf("╭%s╮\033[K\r\n", border)
+	border := strings.Repeat(boxH, innerW)
+	fmt.Printf("%s%s%s\033[K\r\n", boxTL, border, boxTR)
 
 	questionW := visibleLength(question)
 	lPad := (innerW - questionW) / 2
@@ -2152,9 +2270,9 @@ func renderConfirmMenuCore(question string, labels [2]string, descs [2]string, s
 	if rPad < 0 {
 		rPad = 0
 	}
-	fmt.Printf("│%s%s%s%s%s│\033[K\r\n",
-		strings.Repeat(" ", lPad), styleBold+colorBrightWhite, question, colorReset, strings.Repeat(" ", rPad))
-	fmt.Printf("├%s┤\033[K\r\n", border)
+	fmt.Printf("%s%s%s%s%s%s%s\033[K\r\n",
+		boxV, strings.Repeat(" ", lPad), styleBold+colorBrightWhite, question, colorReset, strings.Repeat(" ", rPad), boxV)
+	fmt.Printf("%s%s%s\033[K\r\n", boxML, border, boxMR)
 
 	for i := 0; i < 2; i++ {
 		label := labels[i]
@@ -2164,24 +2282,24 @@ func renderConfirmMenuCore(question string, labels [2]string, descs [2]string, s
 			pad = 0
 		}
 		if i == selectedIdx {
-			fmt.Printf("│ %s❯ %s%s  %s%s%s%s│\033[K\r\n",
-				colorBrightCyan+styleBold,
+			fmt.Printf("%s %s%s %s%s  %s%s%s%s%s\033[K\r\n",
+				boxV, colorBrightCyan+styleBold, iconPrompt,
 				label, colorReset,
 				colorBrightCyan, desc, colorReset,
-				strings.Repeat(" ", pad))
+				strings.Repeat(" ", pad), boxV)
 		} else {
-			fmt.Printf("│ %s  %s%s  %s%s%s%s│\033[K\r\n",
-				styleDim,
+			fmt.Printf("%s %s  %s%s  %s%s%s%s%s\033[K\r\n",
+				boxV, styleDim,
 				label, colorReset,
 				styleDim, desc, colorReset,
-				strings.Repeat(" ", pad))
+				strings.Repeat(" ", pad), boxV)
 		}
 	}
 
-	fmt.Printf("╰%s╯\033[K\r\n", border)
+	fmt.Printf("%s%s%s\033[K\r\n", boxBL, border, boxBR)
 	fmt.Printf("\033[K\r\n")
-	fmt.Printf("  %s↑↓ 导航%s  %sEnter 确认%s\033[K\r\n",
-		styleDim, colorReset, styleDim, colorReset)
+	fmt.Printf("  %s%s%s 导航%s  %sEnter 确认%s\033[K\r\n",
+		styleDim, iconNavUp, iconNavDown, colorReset, styleDim, colorReset)
 	return 8
 }
 
@@ -2304,15 +2422,15 @@ func renderL1Menu(entries []modelTypeEntry, selectedIdx int, linesPrinted int) i
 	if linesPrinted > 0 {
 		fmt.Printf("\033[%dA", linesPrinted)
 	}
-	border := strings.Repeat("─", boxWidth)
-	fmt.Printf("╭%s╮\033[K\r\n", border)
+	border := strings.Repeat(boxH, boxWidth)
+	fmt.Printf("%s%s%s\033[K\r\n", boxTL, border, boxTR)
 	title := "选择要配置的模型"
 	titleW := visibleLength(title)
 	lPad := (boxWidth - titleW) / 2
 	rPad := boxWidth - titleW - lPad
-	fmt.Printf("│%s%s%s%s%s│\033[K\r\n",
-		strings.Repeat(" ", lPad), styleBold+colorBrightWhite, title, colorReset, strings.Repeat(" ", rPad))
-	fmt.Printf("├%s┤\033[K\r\n", border)
+	fmt.Printf("%s%s%s%s%s%s%s\033[K\r\n",
+		boxV, strings.Repeat(" ", lPad), styleBold+colorBrightWhite, title, colorReset, strings.Repeat(" ", rPad), boxV)
+	fmt.Printf("%s%s%s\033[K\r\n", boxML, border, boxMR)
 
 	// 计算所有标签的最大显示宽度
 	maxLabelW := 0
@@ -2331,24 +2449,24 @@ func renderL1Menu(entries []modelTypeEntry, selectedIdx int, linesPrinted int) i
 			pad = 0
 		}
 		if i == selectedIdx {
-			fmt.Printf("│ %s❯ %s%s%s  %s%s%s%s│\033[K\r\n",
-				colorBrightCyan+styleBold,
+			fmt.Printf("%s %s%s %s%s%s  %s%s%s%s%s\033[K\r\n",
+				boxV, colorBrightCyan+styleBold, iconPrompt,
 				label, labelFill, colorReset,
 				colorBrightCyan, val, colorReset,
-				strings.Repeat(" ", pad))
+				strings.Repeat(" ", pad), boxV)
 		} else {
-			fmt.Printf("│ %s  %s%s%s  %s%s%s%s│\033[K\r\n",
-				styleDim,
+			fmt.Printf("%s %s  %s%s%s  %s%s%s%s%s\033[K\r\n",
+				boxV, styleDim,
 				label, labelFill, colorReset,
 				styleDim, val, colorReset,
-				strings.Repeat(" ", pad))
+				strings.Repeat(" ", pad), boxV)
 		}
 	}
 
-	fmt.Printf("╰%s╯\033[K\r\n", border)
+	fmt.Printf("%s%s%s\033[K\r\n", boxBL, border, boxBR)
 	fmt.Printf("\033[K\r\n")
-	fmt.Printf("  %s↑↓ 导航%s  %sEnter 配置%s  %sq/Esc 保存退出%s\033[K\r\n",
-		styleDim, colorReset, styleDim, colorReset, styleDim, colorReset)
+	fmt.Printf("  %s%s%s 导航%s  %sEnter 配置%s  %sq/Esc 保存退出%s\033[K\r\n",
+		styleDim, iconNavUp, iconNavDown, colorReset, styleDim, colorReset, styleDim, colorReset)
 	return len(entries) + 6
 }
 
@@ -2357,15 +2475,15 @@ func renderL2Menu(typeName string, currentValue string, selectedIdx int, linesPr
 	if linesPrinted > 0 {
 		fmt.Printf("\033[%dA", linesPrinted)
 	}
-	border := strings.Repeat("─", boxWidth)
-	fmt.Printf("╭%s╮\033[K\r\n", border)
+	border := strings.Repeat(boxH, boxWidth)
+	fmt.Printf("%s%s%s\033[K\r\n", boxTL, border, boxTR)
 	title := fmt.Sprintf("选择 %s", typeName)
 	titleW := visibleLength(title)
 	lPad := (boxWidth - titleW) / 2
 	rPad := boxWidth - titleW - lPad
-	fmt.Printf("│%s%s%s%s%s│\033[K\r\n",
-		strings.Repeat(" ", lPad), styleBold+colorBrightWhite, title, colorReset, strings.Repeat(" ", rPad))
-	fmt.Printf("├%s┤\033[K\r\n", border)
+	fmt.Printf("%s%s%s%s%s%s%s\033[K\r\n",
+		boxV, strings.Repeat(" ", lPad), styleBold+colorBrightWhite, title, colorReset, strings.Repeat(" ", rPad), boxV)
+	fmt.Printf("%s%s%s\033[K\r\n", boxML, border, boxMR)
 
 	for i, m := range presetModels {
 		isCurrent := (m.ID == currentValue)
@@ -2377,49 +2495,50 @@ func renderL2Menu(typeName string, currentValue string, selectedIdx int, linesPr
 		name := truncateStr(display, boxWidth-6)
 		nameW := visibleLength(name)
 		var check string
-		checkW := 2
+		var checkW int
 		if isCurrent {
-			check = fmt.Sprintf("%s✓%s", colorBrightGreen, colorReset)
-			checkW = 1
+			check = fmt.Sprintf("%s%s%s", colorBrightGreen, iconCheck, colorReset)
+			checkW = visibleLength(iconCheck)
 		} else {
-			check = "  "
+			check = strings.Repeat(" ", visibleLength(iconCheck))
+			checkW = visibleLength(iconCheck)
 		}
-		pad := boxWidth - 4 - nameW - checkW
+		pad := boxWidth - 3 - nameW - checkW - 1
 		if pad < 0 {
 			pad = 0
 		}
 		if isSelected {
-			fmt.Printf("│ %s❯%s %s%s%s%s %s│\033[K\r\n",
-				colorBrightCyan+styleBold, colorReset,
+			fmt.Printf("%s %s%s%s %s%s%s%s %s%s\033[K\r\n",
+				boxV, colorBrightCyan+styleBold, iconPrompt, colorReset,
 				colorBrightCyan, name, colorReset,
 				strings.Repeat(" ", pad),
-				check)
+				check, boxV)
 		} else {
-			fmt.Printf("│   %s%s%s%s %s│\033[K\r\n",
-				styleDim, name, colorReset,
+			fmt.Printf("%s   %s%s%s%s %s%s\033[K\r\n",
+				boxV, styleDim, name, colorReset,
 				strings.Repeat(" ", pad),
-				check)
+				check, boxV)
 		}
 	}
 
 	// 自定义选项（索引 len(presetModels)）
-	customText := "✏ 自定义输入..."
+	customText := fmt.Sprintf("%s 自定义输入...", iconEdit)
 	customPad := boxWidth - 3 - visibleLength(customText)
 	if selectedIdx == len(presetModels) {
-		fmt.Printf("│ %s❯%s %s%s%s%s│\033[K\r\n",
-			colorBrightCyan+styleBold, colorReset,
+		fmt.Printf("%s %s%s%s %s%s%s%s%s\033[K\r\n",
+			boxV, colorBrightCyan+styleBold, iconPrompt, colorReset,
 			colorBrightYellow, customText, colorReset,
-			strings.Repeat(" ", customPad))
+			strings.Repeat(" ", customPad), boxV)
 	} else {
-		fmt.Printf("│   %s%s%s%s│\033[K\r\n",
-			styleDim, customText, colorReset,
-			strings.Repeat(" ", customPad))
+		fmt.Printf("%s   %s%s%s%s%s\033[K\r\n",
+			boxV, styleDim, customText, colorReset,
+			strings.Repeat(" ", customPad), boxV)
 	}
 
-	fmt.Printf("╰%s╯\033[K\r\n", border)
+	fmt.Printf("%s%s%s\033[K\r\n", boxBL, border, boxBR)
 	fmt.Printf("\033[K\r\n")
-	fmt.Printf("  %s↑↓ 导航%s  %sEnter 确认%s  %sq/Esc 返回%s\033[K\r\n",
-		styleDim, colorReset, styleDim, colorReset, styleDim, colorReset)
+	fmt.Printf("  %s%s%s 导航%s  %sEnter 确认%s  %sq/Esc 返回%s\033[K\r\n",
+		styleDim, iconNavUp, iconNavDown, colorReset, styleDim, colorReset, styleDim, colorReset)
 	return len(presetModels) + 7
 }
 
@@ -2792,9 +2911,9 @@ func printSummary(cfg Config) {
 		if pad < 0 {
 			pad = 0
 		}
-		return fmt.Sprintf("%s%s%s%s│ %s%s%s",
+		return fmt.Sprintf("%s%s%s%s%s %s%s%s",
 			styleBold+colorBrightWhite, label, colorReset,
-			strings.Repeat(" ", pad),
+			strings.Repeat(" ", pad), boxV,
 			valueColor, value, colorReset)
 	}
 
@@ -2995,7 +3114,26 @@ func checkForUpdates() {
 // ==================== 主程序 ====================
 
 func main() {
-	initWindowsConsole()
+	// Windows 下保存旧代码页并启用 UTF-8 / VT；其他平台为 no-op
+	restore := initWindowsConsole()
+	defer restore()
+
+	// 检测 CJK locale，用于 ambiguous width 渲染
+	cjkAmbiguous = detectCJKLocale()
+
+	// Ctrl+C / SIGTERM：清理 raw mode + 恢复代码页后退出
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		if rawModeState != nil {
+			term.Restore(int(syscall.Stdin), rawModeState)
+			fmt.Println()
+		}
+		restore()
+		os.Exit(130)
+	}()
+
 	// 显示 Logo
 	printLogo()
 

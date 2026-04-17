@@ -9,8 +9,19 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// initWindowsConsole 在非 Windows 平台上是空操作
-func initWindowsConsole() {}
+// legacyConsoleMode 在非 Windows 平台始终为 false；主文件中的 enterRawMode 会据此决定是否降级。
+var legacyConsoleMode bool
+
+// initWindowsConsole 在非 Windows 平台上只返回一个空的 restore，保持签名一致
+func initWindowsConsole() (restore func()) {
+	return func() {}
+}
+
+// restoreConsole 在非 Windows 上为 no-op，但保留函数以让 raw-mode Ctrl+C 路径两端对称
+func restoreConsole() {}
+
+// getWindowsACP 在非 Windows 上返回 0，detectCJKLocale 会忽略此值
+func getWindowsACP() uint32 { return 0 }
 
 // readConsoleKey 在非 Windows 平台上是编译占位，运行时永不被调用
 func readConsoleKey() KeyType {
