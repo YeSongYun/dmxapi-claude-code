@@ -64,22 +64,28 @@ const (
 	fixedDisableExperimentalBetas = "1"
 )
 
-var presetModels = []string{
-	"claude-opus-4-6-cc",
-	"claude-sonnet-4-6-cc",
-	"claude-haiku-4-5-20251001-cc",
-	"MiniMax-M2.5-cc",
-	"glm-5-cc",
-	"kimi-k2.5-cc",
-	"mimo-v2-flash-cc",
-	"hunyuan-2.0-thinking-20251109-cc",
-	"qwen3.5-plus-cc",
-	"qwen3.5-flash-cc",
-	"DeepSeek-V3.2-cc",
-	"hunyuan-2.0-instruct-20251111-cc",
-	"claude-opus-4-6",
-	"claude-sonnet-4-6",
-	"claude-haiku-4-5-20251001",
+// presetModel 描述二级菜单中一个预设模型条目：ID 用于写入配置，Hint 仅用于显示。
+type presetModel struct {
+	ID   string
+	Hint string
+}
+
+var presetModels = []presetModel{
+	{"claude-opus-4-7-cc", "3.4 折"},
+	{"claude-opus-4-7", "6.8 折"},
+	{"claude-opus-4-7-ssvip", ""},
+	{"claude-haiku-4-5-20251001-cc", "3.4 折"},
+	{"claude-haiku-4-5-20251001", "6.8 折"},
+	{"claude-haiku-4-5-20251001-ssvip", ""},
+	{"claude-sonnet-4-6-cc", "3.4 折"},
+	{"claude-sonnet-4-6", "6.8 折"},
+	{"claude-sonnet-4-6-ssvip", ""},
+	{"glm-5.1-cc", ""},
+	{"qwen3.6-plus-cc", ""},
+	{"mimo-v2-pro-cc", ""},
+	{"MiniMax-M2.7-cc", ""},
+	{"DeepSeek-V3.2-cc", ""},
+	{"hunyuan-2.0-thinking-20251109-cc", ""},
 }
 
 // allEnvVarKeys 本工具管理的所有环境变量名，清除时使用
@@ -2108,7 +2114,7 @@ func truncateStr(s string, maxLen int) string {
 // findPresetIndex 在 presetModels 中查找，找不到返回 -1
 func findPresetIndex(value string) int {
 	for i, m := range presetModels {
-		if m == value {
+		if m.ID == value {
 			return i
 		}
 	}
@@ -2362,9 +2368,13 @@ func renderL2Menu(typeName string, currentValue string, selectedIdx int, linesPr
 	fmt.Printf("├%s┤\033[K\r\n", border)
 
 	for i, m := range presetModels {
-		isCurrent := (m == currentValue)
+		isCurrent := (m.ID == currentValue)
 		isSelected := (i == selectedIdx)
-		name := truncateStr(m, boxWidth-6)
+		display := m.ID
+		if m.Hint != "" {
+			display = fmt.Sprintf("%s （%s）", m.ID, m.Hint)
+		}
+		name := truncateStr(display, boxWidth-6)
 		nameW := visibleLength(name)
 		var check string
 		checkW := 2
@@ -2451,7 +2461,7 @@ func runL2Menu(typeName, currentValue string) string {
 				}
 				return val
 			}
-			return presetModels[idx]
+			return presetModels[idx].ID
 		case KeyEsc:
 			restore()
 			clearMenuLines(linesPrinted)
