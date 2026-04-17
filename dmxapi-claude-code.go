@@ -7,8 +7,10 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/url"
 	"os"
@@ -560,6 +562,63 @@ func confirm(prompt string) bool {
 
 // ==================== URL 处理 ====================
 
+// ==================== 文件写入 ====================
+
+// writeFileAtomic 原子写入：先写临时文件，fsync 后 rename 替换目标。
+// 防止写入中途被打断（Ctrl+C / OOM / 断电）导致目标文件被截断甚至清空。
+// 失败时保证原目标文件内容不变。
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	// 任一失败都清理临时文件
+	cleanup := func() {
+		tmp.Close()
+		os.Remove(tmpPath)
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		cleanup()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		cleanup()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		cleanup()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	return nil
+}
+
+// describeWriteError 根据错误类型返回用户友好的写入失败描述。
+// 权限问题附加可操作的排查建议。
+func describeWriteError(err error) string {
+	if err == nil {
+		return "写入失败"
+	}
+	if errors.Is(err, fs.ErrPermission) {
+		return "写入失败（权限不足；检查 ls -l 与 lsattr +i 锁定状态）"
+	}
+	return "写入失败"
+}
+
+// describeWindowsRegError 针对 Windows 注册表写入/删除失败给出可操作建议。
+func describeWindowsRegError() string {
+	return "（若企业域策略/组策略推送过该变量，登出重登后可能被恢复）"
+}
+
 // ==================== JSONC 处理 ====================
 
 // trailingCommaRe 匹配 JSON 中 } 或 ] 前的尾随逗号
@@ -618,6 +677,318 @@ func stripJSONC(data []byte) []byte {
 	}
 	// 最后剥离尾随逗号
 	return trailingCommaRe.ReplaceAll(buf.Bytes(), []byte("$1"))
+}
+
+// skipJSONCWhitespace 跳过空白和 JSONC 注释，返回新的位置
+func skipJSONCWhitespace(data []byte, i int) int {
+	for i < len(data) {
+		c := data[i]
+		if c == ' ' || c == '\t' || c == '\n' || c == '\r' {
+			i++
+			continue
+		}
+		if c == '/' && i+1 < len(data) && data[i+1] == '/' {
+			i += 2
+			for i < len(data) && data[i] != '\n' {
+				i++
+			}
+			continue
+		}
+		if c == '/' && i+1 < len(data) && data[i+1] == '*' {
+			i += 2
+			for i+1 < len(data) {
+				if data[i] == '*' && data[i+1] == '/' {
+					i += 2
+					break
+				}
+				i++
+			}
+			continue
+		}
+		break
+	}
+	return i
+}
+
+// skipJSONCString 从 data[i]（必须是 "）开始跳过字符串，返回闭合引号后的位置
+func skipJSONCString(data []byte, i int) int {
+	if i >= len(data) || data[i] != '"' {
+		return i
+	}
+	i++
+	for i < len(data) {
+		c := data[i]
+		if c == '\\' && i+1 < len(data) {
+			i += 2
+			continue
+		}
+		if c == '"' {
+			return i + 1
+		}
+		i++
+	}
+	return i
+}
+
+// skipJSONCValue 从 JSONC 值起点跳到值末尾（不含尾部空白），支持嵌套对象/数组/字符串/字面量
+func skipJSONCValue(data []byte, i int) int {
+	i = skipJSONCWhitespace(data, i)
+	if i >= len(data) {
+		return i
+	}
+	switch data[i] {
+	case '"':
+		return skipJSONCString(data, i)
+	case '{':
+		depth := 1
+		i++
+		for i < len(data) && depth > 0 {
+			i = skipJSONCWhitespace(data, i)
+			if i >= len(data) {
+				break
+			}
+			c := data[i]
+			switch c {
+			case '"':
+				i = skipJSONCString(data, i)
+			case '{', '[':
+				depth++
+				i++
+			case '}', ']':
+				depth--
+				i++
+			default:
+				i++
+			}
+		}
+		return i
+	case '[':
+		depth := 1
+		i++
+		for i < len(data) && depth > 0 {
+			i = skipJSONCWhitespace(data, i)
+			if i >= len(data) {
+				break
+			}
+			c := data[i]
+			switch c {
+			case '"':
+				i = skipJSONCString(data, i)
+			case '{', '[':
+				depth++
+				i++
+			case '}', ']':
+				depth--
+				i++
+			default:
+				i++
+			}
+		}
+		return i
+	default:
+		// 字面量（number / true / false / null），跳到下一个分隔符
+		for i < len(data) {
+			c := data[i]
+			if c == ',' || c == '}' || c == ']' || c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '/' {
+				break
+			}
+			i++
+		}
+		return i
+	}
+}
+
+// removeJSONCTopKey 删除 JSONC 对象内某个顶层键（保留所有注释和非目标键的原始格式）。
+// objStart 指向 '{' 的位置；返回修改后的字节流和是否删除了该键。
+//
+// 删除边界策略（保证 JSON 结构仍合法）：
+//   - 若目标键**不是最后一个**（后面接 `,`）：删除 `[keyNameStart, 逗号之后]`，保留前面的逗号和格式
+//   - 若目标键**是最后一个**（后面接 `}`）：向前找到最近的 `,` 或 `{`，若是 `,` 则连同前导逗号一起删；若直接就是 `{` 则只删键本身
+//
+// 不吞前后空白/换行，避免破坏用户原本的缩进和注释对齐。
+func removeJSONCTopKey(data []byte, objStart int, keyName string) (output []byte, removed bool) {
+	if objStart >= len(data) || data[objStart] != '{' {
+		return data, false
+	}
+	i := objStart + 1
+	for i < len(data) {
+		i = skipJSONCWhitespace(data, i)
+		if i >= len(data) || data[i] == '}' {
+			return data, false
+		}
+		if data[i] != '"' {
+			return data, false
+		}
+		keyNameStart := i
+		keyEnd := skipJSONCString(data, i)
+		rawKey := string(data[keyNameStart:keyEnd])
+		quotedKey := fmt.Sprintf("%q", keyName)
+		match := rawKey == quotedKey
+		i = keyEnd
+		i = skipJSONCWhitespace(data, i)
+		if i >= len(data) || data[i] != ':' {
+			return data, false
+		}
+		i++ // 跳过 ':'
+		valEnd := skipJSONCValue(data, i)
+		if match {
+			// 看值后面是逗号还是 '}'
+			after := skipJSONCWhitespace(data, valEnd)
+			delStart := keyNameStart
+			delEnd := valEnd
+			if after < len(data) && data[after] == ',' {
+				// 目标键不是最后：一并吞掉尾部逗号，后续键仍有前导格式
+				delEnd = after + 1
+			} else {
+				// 目标键是最后一个：尝试吞前导逗号
+				j := keyNameStart - 1
+				for j > objStart {
+					c := data[j]
+					if c == ' ' || c == '\t' || c == '\n' || c == '\r' {
+						j--
+						continue
+					}
+					break
+				}
+				if j >= objStart && data[j] == ',' {
+					delStart = j
+				}
+				// 前面就是 '{' 的情况：保持 delStart = keyNameStart
+			}
+			var buf bytes.Buffer
+			buf.Write(data[:delStart])
+			buf.Write(data[delEnd:])
+			return buf.Bytes(), true
+		}
+		// 未匹配：跳到下一个键
+		i = valEnd
+		i = skipJSONCWhitespace(data, i)
+		if i < len(data) && data[i] == ',' {
+			i++
+			continue
+		}
+		return data, false
+	}
+	return data, false
+}
+
+// findTopLevelObjectRange 返回 JSONC data 里顶层 JSON 对象的起止位置（包含 '{' 和 '}'）。
+// 返回 (start, end+1, true)。若未找到对象返回 (_, _, false)。
+func findTopLevelObjectRange(data []byte) (int, int, bool) {
+	i := skipJSONCWhitespace(data, 0)
+	if i >= len(data) || data[i] != '{' {
+		return 0, 0, false
+	}
+	start := i
+	end := skipJSONCValue(data, i)
+	return start, end, true
+}
+
+// findNestedObjectStart 在顶层对象里查找某个键对应的嵌套对象值，返回该对象的 '{' 位置。
+// 未找到返回 (-1, false)。
+func findNestedObjectStart(data []byte, parentStart int, keyName string) (int, bool) {
+	if parentStart >= len(data) || data[parentStart] != '{' {
+		return -1, false
+	}
+	i := parentStart + 1
+	for i < len(data) {
+		i = skipJSONCWhitespace(data, i)
+		if i >= len(data) || data[i] == '}' {
+			return -1, false
+		}
+		if data[i] != '"' {
+			return -1, false
+		}
+		keyNameStart := i
+		keyEnd := skipJSONCString(data, i)
+		rawKey := string(data[keyNameStart:keyEnd])
+		quotedKey := fmt.Sprintf("%q", keyName)
+		match := rawKey == quotedKey
+		i = keyEnd
+		i = skipJSONCWhitespace(data, i)
+		if i >= len(data) || data[i] != ':' {
+			return -1, false
+		}
+		i++
+		i = skipJSONCWhitespace(data, i)
+		if match {
+			if i < len(data) && data[i] == '{' {
+				return i, true
+			}
+			return -1, false
+		}
+		// 跳过值
+		i = skipJSONCValue(data, i)
+		i = skipJSONCWhitespace(data, i)
+		if i < len(data) && data[i] == ',' {
+			i++
+			continue
+		}
+		return -1, false
+	}
+	return -1, false
+}
+
+// removeJSONCTopKeys 批量删除 JSONC 文档里多个顶层键（保留注释）。返回修改后的字节流和删除计数。
+func removeJSONCTopKeys(data []byte, keys []string) ([]byte, int) {
+	count := 0
+	out := data
+	for _, k := range keys {
+		start, _, ok := findTopLevelObjectRange(out)
+		if !ok {
+			break
+		}
+		newOut, removed := removeJSONCTopKey(out, start, k)
+		if removed {
+			out = newOut
+			count++
+		}
+	}
+	return out, count
+}
+
+// removeJSONCNestedKeys 删除 JSONC 顶层对象中 parentKey 嵌套对象内的多个子键（保留注释）。
+// 返回修改后的字节流、被删子键数量和是否整个 parent 对象变空（调用方可据此决定是否连带删 parent 键）。
+func removeJSONCNestedKeys(data []byte, parentKey string, childKeys []string) (output []byte, removed int, parentEmpty bool) {
+	topStart, _, ok := findTopLevelObjectRange(data)
+	if !ok {
+		return data, 0, false
+	}
+	nestedStart, nestedOk := findNestedObjectStart(data, topStart, parentKey)
+	if !nestedOk {
+		return data, 0, false
+	}
+	out := data
+	for _, k := range childKeys {
+		// 每次删除后 offset 会变，重新定位 parent
+		topS, _, ok := findTopLevelObjectRange(out)
+		if !ok {
+			break
+		}
+		ns, nok := findNestedObjectStart(out, topS, parentKey)
+		if !nok {
+			break
+		}
+		newOut, ok := removeJSONCTopKey(out, ns, k)
+		if ok {
+			out = newOut
+			removed++
+		}
+		_ = nestedStart // silence
+	}
+	// 检查 parent 是否空
+	topS, _, ok := findTopLevelObjectRange(out)
+	if ok {
+		ns, nok := findNestedObjectStart(out, topS, parentKey)
+		if nok {
+			i := ns + 1
+			i = skipJSONCWhitespace(out, i)
+			if i < len(out) && out[i] == '}' {
+				parentEmpty = true
+			}
+		}
+	}
+	return out, removed, parentEmpty
 }
 
 // ==================== URL 处理 ====================
@@ -736,6 +1107,19 @@ func detectShellProfile(goos string) shellProfile {
 	}
 }
 
+// allUnixCandidateConfigFiles 返回所有可能包含 ANTHROPIC_* 变量的 Unix shell 配置文件（相对 HOME）。
+// 清除操作使用此集合，与 $SHELL 的登录 shell 无关——因为用户可能同时用多种 shell。
+func allUnixCandidateConfigFiles() []string {
+	return []string{
+		".zshrc", ".zshenv", ".zprofile", ".zlogin",
+		".bashrc", ".bash_profile", ".bash_login", ".profile",
+		".config/fish/config.fish",
+		".kshrc",
+		".cshrc",
+		".tcshrc",
+	}
+}
+
 // setEnvVarsWindows 在 Windows 上批量设置用户环境变量（写入后立即校验）
 func setEnvVarsWindows(vars map[string]string) error {
 	for key, value := range vars {
@@ -778,8 +1162,14 @@ func setAndVerifyUserEnvWithOps(key, value string, setFn userEnvSetter, getFn us
 
 func setUserEnv(key, value string) error {
 	if len(value) > 900 {
-		return runCommand("REG", "ADD", `HKCU\Environment`, "/V", key, "/T", "REG_SZ", "/D", value, "/F")
+		// REG ADD 不自动广播 WM_SETTINGCHANGE，需要手工通知其他进程环境变量已变
+		if err := runCommand("REG", "ADD", `HKCU\Environment`, "/V", key, "/T", "REG_SZ", "/D", value, "/F"); err != nil {
+			return err
+		}
+		broadcastEnvironmentChange()
+		return nil
 	}
+	// setx 会自动广播，无需额外通知
 	return runCommand("setx", key, value)
 }
 
@@ -877,7 +1267,7 @@ func setEnvVarsUnix(vars map[string]string) error {
 			if !strings.HasSuffix(newContent, "\n") {
 				newContent += "\n"
 			}
-			if err := os.WriteFile(configPath, []byte(newContent), 0644); err != nil {
+			if err := writeFileAtomic(configPath, []byte(newContent), 0644); err != nil {
 				return fmt.Errorf("写入 %s 失败: %v", configPath, err)
 			}
 			continue
@@ -938,7 +1328,7 @@ func setEnvVarsUnix(vars map[string]string) error {
 		if !strings.HasSuffix(newContent, "\n") {
 			newContent += "\n"
 		}
-		if err := os.WriteFile(configPath, []byte(newContent), 0644); err != nil {
+		if err := writeFileAtomic(configPath, []byte(newContent), 0644); err != nil {
 			return fmt.Errorf("写入 %s 失败: %v", configPath, err)
 		}
 	}
@@ -1078,13 +1468,14 @@ func mergeClaudeSettings(existingJSON []byte, managedEnv map[string]string) ([]b
 
 // clearClaudeSettingsManagedKeys 从给定 JSON 中移除本工具管理的 env 键。
 // 返回清理后的 JSON、是否实际移除了配置以及错误。
+// 通过基于字符串的定点删除保留用户 settings.json 中的 // 注释与尾随逗号。
 func clearClaudeSettingsManagedKeys(existingJSON []byte) ([]byte, bool, error) {
+	// 先解析确认是否存在受管键（没有就早退）
 	cleaned := stripJSONC(existingJSON)
 	var settings map[string]interface{}
 	if err := json.Unmarshal(cleaned, &settings); err != nil {
 		return nil, false, fmt.Errorf("解析 Claude settings.json 失败: %v", err)
 	}
-
 	existingEnv, ok := settings[claudeSettingsEnvKey]
 	if !ok {
 		return nil, false, nil
@@ -1093,28 +1484,25 @@ func clearClaudeSettingsManagedKeys(existingJSON []byte) ([]byte, bool, error) {
 	if !ok {
 		return nil, false, fmt.Errorf("Claude settings.json 中 env 不是对象")
 	}
-
-	removed := false
+	anyHit := false
 	for _, key := range allEnvVarKeys {
 		if _, exists := envMap[key]; exists {
-			delete(envMap, key)
-			removed = true
+			anyHit = true
+			break
 		}
 	}
-	if !removed {
+	if !anyHit {
 		return nil, false, nil
 	}
 
-	if len(envMap) == 0 {
-		delete(settings, claudeSettingsEnvKey)
-	} else {
-		settings[claudeSettingsEnvKey] = envMap
+	// 定点删除 env 对象里的受管键（保留注释）
+	output, _, envBecameEmpty := removeJSONCNestedKeys(existingJSON, claudeSettingsEnvKey, allEnvVarKeys)
+
+	// 若 env 对象变空，把 env 顶层键也删除
+	if envBecameEmpty {
+		output, _ = removeJSONCTopKeys(output, []string{claudeSettingsEnvKey})
 	}
 
-	output, err := json.MarshalIndent(settings, "", "  ")
-	if err != nil {
-		return nil, false, fmt.Errorf("序列化 Claude settings.json 失败: %v", err)
-	}
 	return output, true, nil
 }
 
@@ -1137,7 +1525,7 @@ func saveClaudeSettingsConfigWithAgentTeams(cfg Config, agentTeamsVal string) er
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(settingsPath, append(merged, '\n'), 0644)
+	return writeFileAtomic(settingsPath, append(merged, '\n'), 0644)
 }
 
 // saveClaudeSettingsConfig 将 cfg 写入 Claude Code settings.json 的 env 键。
@@ -1165,8 +1553,8 @@ func clearClaudeSettingsConfig() clearResult {
 		return clearResult{Location: settingsPath, Status: "skipped", Message: "未找到相关配置"}
 	}
 	output = append(output, '\n')
-	if err := os.WriteFile(settingsPath, output, 0644); err != nil {
-		return clearResult{Location: settingsPath, Status: "failed", Message: "写入失败", Err: err}
+	if err := writeFileAtomic(settingsPath, output, 0644); err != nil {
+		return clearResult{Location: settingsPath, Status: "failed", Message: describeWriteError(err), Err: err}
 	}
 	return clearResult{Location: settingsPath, Status: "success", Message: "已移除受管 env 配置"}
 }
@@ -1361,7 +1749,7 @@ func saveVSCodeConfig(cfg Config) error {
 		}
 	}
 
-	return os.WriteFile(settingsPath, merged, 0644)
+	return writeFileAtomic(settingsPath, merged, 0644)
 }
 
 // clearVSCodeConfig 从 VSCode settings.json 中移除本工具写入的配置键。
@@ -1378,32 +1766,26 @@ func clearVSCodeConfig() clearResult {
 		return clearResult{Location: settingsPath, Status: "skipped", Message: "文件不存在或无法读取"}
 	}
 
+	// 先用合法 JSON 快速检测是否需要处理
 	cleaned := stripJSONC(data)
 	var settings map[string]interface{}
 	if err := json.Unmarshal(cleaned, &settings); err != nil {
 		return clearResult{Location: settingsPath, Status: "failed", Message: "JSON 解析失败", Err: err}
 	}
-
 	_, hasNew := settings[vscodeEnvKey]
 	_, hasOld := settings[vscodeEnvKeyOld]
 	if !hasNew && !hasOld {
 		return clearResult{Location: settingsPath, Status: "skipped", Message: "未找到相关配置"}
 	}
 
-	delete(settings, vscodeEnvKey)
-	delete(settings, vscodeEnvKeyOld)
+	// 用基于字符串的定点删除保留用户的注释和尾随逗号
+	output, _ := removeJSONCTopKeys(data, []string{vscodeEnvKey, vscodeEnvKeyOld})
 
-	output, err := json.MarshalIndent(settings, "", "  ")
-	if err != nil {
-		return clearResult{Location: settingsPath, Status: "failed", Message: "JSON 序列化失败", Err: err}
-	}
-	output = append(output, '\n')
-
-	if err := os.WriteFile(settingsPath, output, 0644); err != nil {
-		return clearResult{Location: settingsPath, Status: "failed", Message: "写入失败", Err: err}
+	if err := writeFileAtomic(settingsPath, output, 0644); err != nil {
+		return clearResult{Location: settingsPath, Status: "failed", Message: describeWriteError(err), Err: err}
 	}
 
-	return clearResult{Location: settingsPath, Status: "success", Message: "已移除配置键"}
+	return clearResult{Location: settingsPath, Status: "success", Message: "已移除配置键（保留其他内容与注释）"}
 }
 
 // shellConfigLocation 返回 shell 配置文件的展示名称。
@@ -1411,7 +1793,18 @@ func shellConfigLocation(configFile string) string {
 	return "~/" + configFile
 }
 
+// fishSetLinePattern 匹配 fish 的 set 语句设置 key：
+// set [-选项集]* KEY [值...]  后可跟可选行注释 `# ...`
+// 选项集覆盖 U/g/x/e/l（universal/global/export/erase/local 各种组合）
+// 示例：set -Ux KEY / set -gx KEY / set -x KEY / set -U KEY / set -Ue KEY / set KEY
+func fishSetLineRe(key string) *regexp.Regexp {
+	// 正则字面量：`^set(\s+-[UugxelL]+)*\s+{key}(\s|$|#)`
+	escKey := regexp.QuoteMeta(key)
+	return regexp.MustCompile(`^set(\s+-[UugxelL]+)*\s+` + escKey + `(\s|$|#)`)
+}
+
 // shellLineManagesEnvVar 判断一行 shell 配置是否在管理指定环境变量。
+// isFish=true 时按 fish 语法匹配；此外还识别 csh/tcsh 的 setenv/unsetenv 语法。
 func shellLineManagesEnvVar(line, key string, isFish bool) bool {
 	trimmed := strings.TrimSpace(line)
 	if trimmed == "" || strings.HasPrefix(trimmed, "#") {
@@ -1419,9 +1812,10 @@ func shellLineManagesEnvVar(line, key string, isFish bool) bool {
 	}
 
 	if isFish {
-		return strings.HasPrefix(trimmed, fmt.Sprintf("set -Ux %s ", key)) || trimmed == fmt.Sprintf("set -Ux %s", key)
+		return fishSetLineRe(key).MatchString(trimmed)
 	}
 
+	// POSIX 风格（bash/zsh/ksh/sh）
 	patterns := []string{
 		fmt.Sprintf("export %s=", key),
 		fmt.Sprintf("declare -x %s=", key),
@@ -1432,6 +1826,14 @@ func shellLineManagesEnvVar(line, key string, isFish bool) bool {
 		if strings.HasPrefix(trimmed, pattern) {
 			return true
 		}
+	}
+
+	// csh/tcsh: setenv KEY VALUE / unsetenv KEY
+	if strings.HasPrefix(trimmed, fmt.Sprintf("setenv %s ", key)) ||
+		strings.HasPrefix(trimmed, fmt.Sprintf("setenv %s\t", key)) ||
+		trimmed == fmt.Sprintf("setenv %s", key) ||
+		strings.HasPrefix(trimmed, fmt.Sprintf("unsetenv %s", key)) {
+		return true
 	}
 
 	assignPrefix := key + "="
@@ -1447,6 +1849,8 @@ func shellLineManagesEnvVar(line, key string, isFish bool) bool {
 }
 
 // removeEnvVarsUnixFromFile 从单个 Unix shell 配置文件中删除受管环境变量。
+// 未命中任何受管行时不修改文件（保持 mtime 不变），避免干扰 git 追踪 dotfiles。
+// 不再压缩用户原本的空行格式。
 func removeEnvVarsUnixFromFile(configPath string, keys []string, isFish bool) (removedCount int, err error) {
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
 		return 0, nil
@@ -1466,7 +1870,6 @@ func removeEnvVarsUnixFromFile(configPath string, keys []string, isFish bool) (r
 	normalized = strings.ReplaceAll(normalized, "\r", "\n")
 	lines := strings.Split(normalized, "\n")
 	newLines := make([]string, 0, len(lines))
-	prevBlank := false
 
 	for _, line := range lines {
 		managed := false
@@ -1480,23 +1883,89 @@ func removeEnvVarsUnixFromFile(configPath string, keys []string, isFish bool) (r
 		if managed {
 			continue
 		}
-
-		isBlank := strings.TrimSpace(line) == ""
-		if isBlank && prevBlank {
-			continue
-		}
 		newLines = append(newLines, line)
-		prevBlank = isBlank
+	}
+
+	// 未命中任何受管行：不重写文件，保持原 mtime
+	if removedCount == 0 {
+		return 0, nil
 	}
 
 	newContent := strings.Join(newLines, "\n")
 	if !strings.HasSuffix(newContent, "\n") {
 		newContent += "\n"
 	}
-	if err := os.WriteFile(configPath, []byte(newContent), perm); err != nil {
+	if err := writeFileAtomic(configPath, []byte(newContent), perm); err != nil {
 		return removedCount, fmt.Errorf("写入 %s 失败: %v", configPath, err)
 	}
 	return removedCount, nil
+}
+
+// clearWindowsRegistryFromWSL 通过 WSL interop 调用 reg.exe 清理 Windows 用户环境变量。
+// 当在 WSL 内执行清除时，只清 Linux 侧 shell 配置会留下注册表里残留，导致 Windows 侧 cmd/VSCode 仍用旧值。
+func clearWindowsRegistryFromWSL() clearResult {
+	regExe, err := exec.LookPath("reg.exe")
+	if err != nil {
+		return clearResult{Location: "WSL → Windows 注册表", Status: "skipped", Message: "reg.exe 不可用（WSL interop 未启用或非 WSL 环境）"}
+	}
+	var failures []string
+	removed := 0
+	for _, key := range allEnvVarKeys {
+		cmd := exec.Command(regExe, "DELETE", `HKCU\Environment`, "/V", key, "/F")
+		output, err := cmd.CombinedOutput()
+		if err == nil {
+			removed++
+			continue
+		}
+		// reg.exe 在变量不存在时返回退出码 1，不应视为失败
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+			continue
+		}
+		failures = append(failures, fmt.Sprintf("%s: %s", key, strings.TrimSpace(string(output))))
+	}
+	if len(failures) > 0 {
+		return clearResult{
+			Location: "WSL → Windows 注册表",
+			Status:   "failed",
+			Message:  fmt.Sprintf("%d 个变量清除失败\n      %s", len(failures), strings.Join(failures, "\n      ")),
+		}
+	}
+	if removed == 0 {
+		return clearResult{Location: "WSL → Windows 注册表", Status: "skipped", Message: "注册表未包含受管变量"}
+	}
+	return clearResult{Location: "WSL → Windows 注册表", Status: "success", Message: fmt.Sprintf("已移除 %d 个环境变量", removed)}
+}
+
+// clearFishUniversalVariables 通过 `fish -c "set -Ue KEY"` 真正清除 fish 的 universal 变量。
+// fish 的 universal 变量存储在二进制 fish_variables 里，只删 config.fish 文本的 set -Ux 行不会影响它。
+func clearFishUniversalVariables() clearResult {
+	fishExe, err := exec.LookPath("fish")
+	if err != nil {
+		return clearResult{Location: "Fish universal 变量", Status: "skipped", Message: "未检测到 fish 可执行文件"}
+	}
+	var failures []string
+	removed := 0
+	for _, key := range allEnvVarKeys {
+		// set -Ue KEY：erase universal variable
+		cmd := exec.Command(fishExe, "-c", fmt.Sprintf("set -Ue %s", key))
+		if output, err := cmd.CombinedOutput(); err == nil {
+			removed++
+		} else {
+			trimmed := strings.TrimSpace(string(output))
+			// fish 在变量不存在时也会返回非 0，但 stderr 为空或为 set: universal variable... 一类提示；跳过
+			if trimmed == "" {
+				continue
+			}
+			failures = append(failures, fmt.Sprintf("%s: %s", key, trimmed))
+		}
+	}
+	if len(failures) > 0 {
+		return clearResult{Location: "Fish universal 变量", Status: "failed", Message: strings.Join(failures, "；")}
+	}
+	if removed == 0 {
+		return clearResult{Location: "Fish universal 变量", Status: "skipped", Message: "无受管 universal 变量"}
+	}
+	return clearResult{Location: "Fish universal 变量", Status: "success", Message: fmt.Sprintf("已 erase %d 个 universal 变量", removed)}
 }
 
 // clearAllConfig 清除所有配置（模式6）。
@@ -1555,7 +2024,7 @@ func clearAllConfig() {
 			results = append(results, clearResult{
 				Location: "Windows 注册表",
 				Status:   "failed",
-				Message:  fmt.Sprintf("%d 个变量清除失败\n      %s", len(regFailures), strings.Join(regFailures, "\n      ")),
+				Message:  fmt.Sprintf("%d 个变量清除失败 %s\n      %s", len(regFailures), describeWindowsRegError(), strings.Join(regFailures, "\n      ")),
 			})
 		} else {
 			results = append(results, clearResult{
@@ -1570,27 +2039,34 @@ func clearAllConfig() {
 			results = append(results, clearResult{Location: "Shell 配置文件", Status: "failed", Message: "无法确定用户目录", Err: err})
 			break
 		}
-		profile := detectShellProfile(runtime.GOOS)
-		for _, configFile := range profile.configFiles {
+		// 扫全集配置文件：用户可能同时用多个 shell，保存时只写 $SHELL 对应文件，
+		// 但清除要覆盖所有可能的位置（包括 .zshenv、.bash_login、.config/fish/config.fish、.cshrc 等）。
+		for _, configFile := range allUnixCandidateConfigFiles() {
 			configPath := filepath.Join(homeDir, configFile)
 			location := shellConfigLocation(configFile)
 			if _, err := os.Stat(configPath); os.IsNotExist(err) {
-				results = append(results, clearResult{Location: location, Status: "skipped", Message: "未找到相关配置"})
-				continue
+				continue // 不存在就不报告，避免长列表里都是 skipped
 			} else if err != nil {
 				results = append(results, clearResult{Location: location, Status: "failed", Message: "无法读取文件状态", Err: err})
 				continue
 			}
-			removedCount, err := removeEnvVarsUnixFromFile(configPath, allEnvVarKeys, profile.isFish)
+			isFish := strings.HasSuffix(configFile, "config.fish")
+			removedCount, err := removeEnvVarsUnixFromFile(configPath, allEnvVarKeys, isFish)
 			switch {
 			case err != nil:
 				results = append(results, clearResult{Location: location, Status: "failed", Message: "清理失败", Err: err})
 			case removedCount > 0:
 				results = append(results, clearResult{Location: location, Status: "success", Message: fmt.Sprintf("已移除 %d 个环境变量配置", removedCount)})
 			default:
-				results = append(results, clearResult{Location: location, Status: "skipped", Message: "未找到相关配置"})
+				// 文件存在但无受管配置：不记录，保持输出简洁
 			}
 		}
+		// WSL 环境下尝试清 Windows 侧用户注册表（通过 interop 调用 reg.exe）
+		if isWSL() {
+			results = append(results, clearWindowsRegistryFromWSL())
+		}
+		// Fish universal 变量在 fish_variables 二进制里，仅清 config.fish 不够——直接用 fish 命令 erase
+		results = append(results, clearFishUniversalVariables())
 	}
 
 	results = append(results, clearClaudeSettingsConfig())
@@ -1709,22 +2185,23 @@ func configureVSCode(cfg Config, exitOnDone bool) {
 	}
 }
 
-// removeEnvVarUnix 从 Unix shell 配置文件中删除指定环境变量（幂等）
+// removeEnvVarUnix 从 Unix shell 配置文件中删除指定环境变量（幂等）。
+// 扫描全集候选文件（而不只是 $SHELL 的登录 shell），以清掉用户在其他 shell 配置里残留的值。
 func removeEnvVarUnix(key string) error {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return err
 	}
 
-	profile := detectShellProfile(runtime.GOOS)
-	for _, configFile := range profile.configFiles {
+	for _, configFile := range allUnixCandidateConfigFiles() {
 		configPath := filepath.Join(homeDir, configFile)
 		if _, err := os.Stat(configPath); os.IsNotExist(err) {
 			continue
 		} else if err != nil {
 			return err
 		}
-		if _, err := removeEnvVarsUnixFromFile(configPath, []string{key}, profile.isFish); err != nil {
+		isFish := strings.HasSuffix(configFile, "config.fish")
+		if _, err := removeEnvVarsUnixFromFile(configPath, []string{key}, isFish); err != nil {
 			return err
 		}
 	}
@@ -1760,6 +2237,7 @@ func removeAndVerifyUserEnvWithOps(key string, removeFn userEnvRemover, getFn us
 func removeUserEnv(key string) error {
 	// 优先用 PowerShell .NET API：变量不存在时也不报错，兼容所有 Windows 语言版本和编码
 	// 先 LookPath 确认 powershell.exe 在 PATH 中，避免 Server Core 等精简环境下的无意义错误输出
+	// PowerShell .NET API 会自动广播 WM_SETTINGCHANGE，无需手工通知
 	if _, err := exec.LookPath("powershell"); err == nil {
 		psKey := strings.ReplaceAll(key, "'", "''") // 转义单引号（防御性处理）
 		script := fmt.Sprintf(`[Environment]::SetEnvironmentVariable('%s', $null, 'User')`, psKey)
@@ -1767,10 +2245,11 @@ func removeUserEnv(key string) error {
 			return nil
 		}
 	}
-	// PowerShell 不可用时回退到 REG DELETE
+	// PowerShell 不可用时回退到 REG DELETE（不会自动广播，需要手工通知）
 	cmd := exec.Command("REG", "DELETE", `HKCU\Environment`, "/V", key, "/F")
 	output, err := cmd.CombinedOutput()
 	if err == nil {
+		broadcastEnvironmentChange()
 		return nil
 	}
 	trimmed := strings.TrimSpace(string(output))

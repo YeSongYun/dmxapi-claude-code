@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCompareVersions(t *testing.T) {
@@ -1020,4 +1021,230 @@ func TestAllEnvVarKeys_ContainsAllKnownKeys(t *testing.T) {
 			t.Errorf("allEnvVarKeys is missing %s", e)
 		}
 	}
+}
+
+func TestWriteFileAtomic(t *testing.T) {
+	t.Run("正常写入后原子替换", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "cfg.txt")
+		if err := os.WriteFile(path, []byte("old"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := writeFileAtomic(path, []byte("new content"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		got, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != "new content" {
+			t.Errorf("want %q, got %q", "new content", string(got))
+		}
+	})
+	t.Run("不残留临时文件", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "cfg.txt")
+		if err := writeFileAtomic(path, []byte("hello"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		entries, _ := os.ReadDir(dir)
+		for _, e := range entries {
+			if e.Name() != "cfg.txt" {
+				t.Errorf("unexpected leftover file: %s", e.Name())
+			}
+		}
+	})
+	t.Run("路径含空格", func(t *testing.T) {
+		dir := t.TempDir()
+		subdir := filepath.Join(dir, "path with space")
+		if err := os.Mkdir(subdir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(subdir, "cfg.txt")
+		if err := writeFileAtomic(path, []byte("ok"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		got, _ := os.ReadFile(path)
+		if string(got) != "ok" {
+			t.Errorf("want %q got %q", "ok", string(got))
+		}
+	})
+}
+
+func TestAllUnixCandidateConfigFiles(t *testing.T) {
+	files := allUnixCandidateConfigFiles()
+	required := []string{
+		".zshrc", ".zshenv", ".zprofile", ".zlogin",
+		".bashrc", ".bash_profile", ".bash_login", ".profile",
+		".config/fish/config.fish",
+		".kshrc", ".cshrc", ".tcshrc",
+	}
+	set := make(map[string]bool)
+	for _, f := range files {
+		set[f] = true
+	}
+	for _, want := range required {
+		if !set[want] {
+			t.Errorf("allUnixCandidateConfigFiles 缺少 %q", want)
+		}
+	}
+}
+
+func TestRemoveJSONCTopKeys_PreservesComments(t *testing.T) {
+	input := []byte(`{
+    // VSCode 用户设置
+    "editor.fontSize": 14,
+    "claudeCode.environmentVariables": [
+        {"name": "ANTHROPIC_BASE_URL", "value": "https://example.com"}
+    ],
+    // 其他配置
+    "workbench.colorTheme": "Dark+",
+}`)
+	out, count := removeJSONCTopKeys(input, []string{"claudeCode.environmentVariables"})
+	if count != 1 {
+		t.Fatalf("count=%d want 1", count)
+	}
+	outStr := string(out)
+	// 目标键应该消失
+	if strings.Contains(outStr, "claudeCode.environmentVariables") {
+		t.Error("claudeCode.environmentVariables should be removed")
+	}
+	// 注释应保留
+	if !strings.Contains(outStr, "// VSCode 用户设置") {
+		t.Error("`// VSCode 用户设置` 注释应保留")
+	}
+	if !strings.Contains(outStr, "// 其他配置") {
+		t.Error("`// 其他配置` 注释应保留")
+	}
+	// 其他键应保留
+	if !strings.Contains(outStr, `"editor.fontSize": 14`) {
+		t.Error("editor.fontSize 应保留")
+	}
+	if !strings.Contains(outStr, `"workbench.colorTheme"`) {
+		t.Error("workbench.colorTheme 应保留")
+	}
+	// 结果应能被 JSONC 解析（stripJSONC + Unmarshal）
+	cleaned := stripJSONC(out)
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(cleaned, &parsed); err != nil {
+		t.Fatalf("结果不是合法 JSONC: %v\n%s", err, outStr)
+	}
+}
+
+func TestRemoveJSONCNestedKeys_PreservesComments(t *testing.T) {
+	input := []byte(`{
+    // Claude Code 设置
+    "permissions": {"allow": ["Read(README.md)"]},
+    "env": {
+        "FOO": "bar",
+        // managed by dmxapi tool
+        "ANTHROPIC_BASE_URL": "https://example.com",
+        "ANTHROPIC_AUTH_TOKEN": "sk-test",
+        "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1"
+    }
+}`)
+	out, removed, _ := removeJSONCNestedKeys(input, "env", []string{
+		"ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS",
+	})
+	if removed != 3 {
+		t.Fatalf("removed=%d want 3", removed)
+	}
+	outStr := string(out)
+	if strings.Contains(outStr, "ANTHROPIC_BASE_URL") || strings.Contains(outStr, "ANTHROPIC_AUTH_TOKEN") {
+		t.Error("受管键应被删除")
+	}
+	if !strings.Contains(outStr, `"FOO": "bar"`) {
+		t.Error("非受管 env 键 FOO 应保留")
+	}
+	if !strings.Contains(outStr, "// Claude Code 设置") {
+		t.Error("注释应保留")
+	}
+	// 结果解析为合法 JSONC
+	cleaned := stripJSONC(out)
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(cleaned, &parsed); err != nil {
+		t.Fatalf("结果不是合法 JSONC: %v\n%s", err, outStr)
+	}
+}
+
+func TestRemoveEnvVarsUnixFromFile_NoOpSkipsWrite(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".zshrc")
+	content := "# user config\nexport PATH=/usr/local/bin:$PATH\nalias ll='ls -la'\n"
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// 故意让文件 mtime 足够旧，好检测是否被重写
+	oldTime := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(path, oldTime, oldTime); err != nil {
+		t.Fatal(err)
+	}
+	info, _ := os.Stat(path)
+	origMtime := info.ModTime()
+
+	removed, err := removeEnvVarsUnixFromFile(path, []string{envBaseURL, envAuthToken}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 0 {
+		t.Fatalf("removed=%d want 0", removed)
+	}
+
+	info2, _ := os.Stat(path)
+	if !info2.ModTime().Equal(origMtime) {
+		t.Errorf("无命中行时不应重写文件；mtime 变了：%v → %v", origMtime, info2.ModTime())
+	}
+	got, _ := os.ReadFile(path)
+	if string(got) != content {
+		t.Errorf("文件内容被修改；want %q got %q", content, string(got))
+	}
+}
+
+func TestShellLineManagesEnvVar_FishExtended(t *testing.T) {
+	cases := []struct {
+		name string
+		line string
+		want bool
+	}{
+		{"set -Ux", "set -Ux ANTHROPIC_BASE_URL 'https://x'", true},
+		{"set -gx", "set -gx ANTHROPIC_BASE_URL 'https://x'", true},
+		{"set -x", "set -x ANTHROPIC_BASE_URL 'https://x'", true},
+		{"set -U", "set -U ANTHROPIC_BASE_URL foo", true},
+		{"set -Ue only", "set -Ue ANTHROPIC_BASE_URL", true},
+		{"set only", "set ANTHROPIC_BASE_URL foo", true},
+		{"带尾注释", "set -Ux ANTHROPIC_BASE_URL 'x' # note", true},
+		{"不同键", "set -Ux OTHER_KEY 'x'", false},
+		{"注释行", "# set -Ux ANTHROPIC_BASE_URL 'x'", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := shellLineManagesEnvVar(c.line, envBaseURL, true)
+			if got != c.want {
+				t.Errorf("shellLineManagesEnvVar(%q, fish) = %v, want %v", c.line, got, c.want)
+			}
+		})
+	}
+}
+
+func TestShellLineManagesEnvVar_Csh(t *testing.T) {
+	cases := []struct {
+		line string
+		want bool
+	}{
+		{"setenv ANTHROPIC_BASE_URL https://example.com", true},
+		{"setenv ANTHROPIC_BASE_URL", true},
+		{"unsetenv ANTHROPIC_BASE_URL", true},
+		{"setenv OTHER_KEY x", false},
+	}
+	for _, c := range cases {
+		got := shellLineManagesEnvVar(c.line, envBaseURL, false)
+		if got != c.want {
+			t.Errorf("shellLineManagesEnvVar(%q, csh-mode) = %v, want %v", c.line, got, c.want)
+		}
+	}
+}
+
+func TestBroadcastEnvironmentChangeStub(t *testing.T) {
+	// 非 Windows 下为 no-op；Windows 下函数存在也可调用（不做实际广播验证）
+	broadcastEnvironmentChange()
 }

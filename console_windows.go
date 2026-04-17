@@ -47,6 +47,9 @@ var (
 	procGetConsoleCP       = kernel32.NewProc("GetConsoleCP")
 	procGetConsoleOutputCP = kernel32.NewProc("GetConsoleOutputCP")
 	procGetACP             = kernel32.NewProc("GetACP")
+
+	user32                  = syscall.NewLazyDLL("user32.dll")
+	procSendMessageTimeoutW = user32.NewProc("SendMessageTimeoutW")
 )
 
 // Windows 控制台兼容性运行时状态
@@ -170,4 +173,31 @@ func restoreConsole() {
 func getWindowsACP() uint32 {
 	cp, _, _ := procGetACP.Call()
 	return uint32(cp)
+}
+
+// broadcastEnvironmentChange 通过 WM_SETTINGCHANGE 通知所有顶层窗口环境变量已更新。
+// 对于通过 REG ADD / REG DELETE 直接改注册表的操作是必需的——这些操作不会自动广播，
+// 导致 Explorer、已开的 cmd、VSCode 等进程仍持有旧值直到重启。
+// setx / PowerShell .NET API 会自动广播，不需要调用此函数。
+func broadcastEnvironmentChange() {
+	const (
+		hwndBroadcast   = uintptr(0xFFFF)
+		wmSettingChange = uintptr(0x001A)
+		smtoAbortIfHung = uintptr(0x0002)
+		timeoutMs       = uintptr(5000)
+	)
+	lParamPtr, err := syscall.UTF16PtrFromString("Environment")
+	if err != nil {
+		return
+	}
+	var result uintptr
+	procSendMessageTimeoutW.Call(
+		hwndBroadcast,
+		wmSettingChange,
+		0, // wParam
+		uintptr(unsafe.Pointer(lParamPtr)),
+		smtoAbortIfHung,
+		timeoutMs,
+		uintptr(unsafe.Pointer(&result)),
+	)
 }

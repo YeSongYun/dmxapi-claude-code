@@ -23,6 +23,9 @@ func restoreConsole() {}
 // getWindowsACP 在非 Windows 上返回 0，detectCJKLocale 会忽略此值
 func getWindowsACP() uint32 { return 0 }
 
+// broadcastEnvironmentChange 在非 Windows 上为 no-op；仅 Windows 需要 WM_SETTINGCHANGE 广播
+func broadcastEnvironmentChange() {}
+
 // readConsoleKey 在非 Windows 平台上是编译占位，运行时永不被调用
 func readConsoleKey() KeyType {
 	return KeyOther
