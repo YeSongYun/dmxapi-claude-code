@@ -105,7 +105,7 @@ var allEnvVarKeys = []string{
 
 // 版本号 / 盒子宽度保持 const（运行时不会变）
 const (
-	appVersion = "1.6.0"
+	appVersion = "1.6.1"
 	boxWidth   = 60
 )
 
@@ -1356,16 +1356,27 @@ func vscodeSettingsPathFor(goos, homeDir, appData, wslWindowsHome string) string
 	}
 }
 
+// applyModelSuffix 对 claude-opus-4-7 和 claude-sonnet-4-6 系列模型 ID 追加 [1m] 后缀。
+func applyModelSuffix(id string) string {
+	if strings.HasSuffix(id, "[1m]") {
+		return id
+	}
+	if strings.Contains(id, "claude-opus-4-7") || strings.Contains(id, "claude-sonnet-4-6") {
+		return id + "[1m]"
+	}
+	return id
+}
+
 // buildManagedEnvMap 根据 Config 构建本工具管理的环境变量集合（纯函数）。
 // agentTeamsVal 为空时不写入 CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS。
 func buildManagedEnvMap(cfg Config, agentTeamsVal string) map[string]string {
 	vars := map[string]string{
 		envBaseURL:                  cfg.BaseURL,
 		envAuthToken:                cfg.AuthToken,
-		envModel:                    cfg.Model,
-		envHaikuModel:               cfg.HaikuModel,
-		envSonnetModel:              cfg.SonnetModel,
-		envOpusModel:                cfg.OpusModel,
+		envModel:                    applyModelSuffix(cfg.Model),
+		envHaikuModel:               applyModelSuffix(cfg.HaikuModel),
+		envSonnetModel:              applyModelSuffix(cfg.SonnetModel),
+		envOpusModel:                applyModelSuffix(cfg.OpusModel),
 		envDisableExperimentalBetas: fixedDisableExperimentalBetas,
 	}
 	if agentTeamsVal != "" {
@@ -3240,7 +3251,7 @@ func runRecommendedConfig() {
 
 	fmt.Println()
 	for {
-		if err := validateAPIConnection(cfg.BaseURL, cfg.AuthToken, cfg.Model); err != nil {
+		if err := validateAPIConnection(cfg.BaseURL, cfg.AuthToken, applyModelSuffix(cfg.Model)); err != nil {
 			printError(fmt.Sprintf("API 连接验证失败: %v", err))
 			fmt.Println()
 			printInfo("当前配置:")
@@ -3681,7 +3692,7 @@ func main() {
 		// 验证 API 连接（循环直到成功）
 		fmt.Println()
 		for {
-			if err := validateAPIConnection(cfg.BaseURL, cfg.AuthToken, cfg.Model); err != nil {
+			if err := validateAPIConnection(cfg.BaseURL, cfg.AuthToken, applyModelSuffix(cfg.Model)); err != nil {
 				printError(fmt.Sprintf("API 连接验证失败: %v", err))
 
 				// 显示当前的URL和Key
