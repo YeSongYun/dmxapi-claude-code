@@ -1,4 +1,4 @@
-$VERSION = "v1.6.2"
+$VERSION = "v1.6.3"
 
 # 设置控制台输出为 UTF-8，确保中文正常显示（在 Go exe 启动前生效）
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8

@@ -105,7 +105,7 @@ var allEnvVarKeys = []string{
 
 // 版本号 / 盒子宽度保持 const（运行时不会变）
 const (
-	appVersion = "1.6.2"
+	appVersion = "1.6.3"
 	boxWidth   = 60
 )
 
@@ -3251,7 +3251,7 @@ func runRecommendedConfig() {
 
 	fmt.Println()
 	for {
-		if err := validateAPIConnection(cfg.BaseURL, cfg.AuthToken, applyModelSuffix(cfg.Model)); err != nil {
+		if err := validateAPIConnection(cfg.BaseURL, cfg.AuthToken, cfg.Model); err != nil {
 			printError(fmt.Sprintf("API 连接验证失败: %v", err))
 			fmt.Println()
 			printInfo("当前配置:")
@@ -3692,7 +3692,7 @@ func main() {
 		// 验证 API 连接（循环直到成功）
 		fmt.Println()
 		for {
-			if err := validateAPIConnection(cfg.BaseURL, cfg.AuthToken, applyModelSuffix(cfg.Model)); err != nil {
+			if err := validateAPIConnection(cfg.BaseURL, cfg.AuthToken, cfg.Model); err != nil {
 				printError(fmt.Sprintf("API 连接验证失败: %v", err))
 
 				// 显示当前的URL和Key
