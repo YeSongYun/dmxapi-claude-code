@@ -214,7 +214,9 @@ $:
               # 提交并推送临时分支到 main
               git add CHANGELOG.md
               git commit -m "docs: update CHANGELOG.md for ${CNB_BRANCH}"
-              git remote set-url origin https://${GIT_USERNAME}:${GIT_ACCESS_TOKEN}@cnb.cool/dmxapi/dmxapi_claude_code
+              ORIGIN_URL=$(git remote get-url origin)
+              ORIGIN_WITH_CREDS=$(echo "$ORIGIN_URL" | sed "s|https://|https://${GIT_USERNAME}:${GIT_ACCESS_TOKEN}@|")
+              git remote set-url origin "$ORIGIN_WITH_CREDS"
               if ! git push origin temp-changelog:main; then
                 echo "推送 CHANGELOG.md 到 main 失败（可能存在并发冲突），跳过本次更新" >&2
                 exit 0
