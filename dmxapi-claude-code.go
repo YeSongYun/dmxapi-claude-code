@@ -42,6 +42,7 @@ const (
 	envOpusModel                = "ANTHROPIC_DEFAULT_OPUS_MODEL"
 	envDisableExperimentalBetas = "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"
 	envAgentTeams               = "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"
+	envEffortLevel              = "CLAUDE_CODE_EFFORT_LEVEL"
 
 	// VSCode settings.json 中写入配置所用的键名（claudeCode 为扩展 package.json 中定义的配置前缀）
 	vscodeEnvKey = "claudeCode.environmentVariables"
@@ -101,11 +102,12 @@ var allEnvVarKeys = []string{
 	envOpusModel,
 	envDisableExperimentalBetas,
 	envAgentTeams,
+	envEffortLevel,
 }
 
 // 版本号 / 盒子宽度保持 const（运行时不会变）
 const (
-	appVersion = "1.6.3"
+	appVersion = "1.6.4"
 	boxWidth   = 60
 )
 
@@ -1382,6 +1384,9 @@ func buildManagedEnvMap(cfg Config, agentTeamsVal string) map[string]string {
 	if agentTeamsVal != "" {
 		vars[envAgentTeams] = agentTeamsVal
 	}
+	if effortLevelVal := getManagedEffortLevelValue(); effortLevelVal != "" {
+		vars[envEffortLevel] = effortLevelVal
+	}
 	return vars
 }
 
@@ -1400,6 +1405,9 @@ func buildVSCodeEnvVars(cfg Config, agentTeamsVal string) []map[string]string {
 	}
 	if agentTeamsVal != "" {
 		keys = append(keys, envAgentTeams)
+	}
+	if getManagedEffortLevelValue() != "" {
+		keys = append(keys, envEffortLevel)
 	}
 
 	entries := make([]map[string]string, 0, len(keys))
@@ -1595,7 +1603,8 @@ func isClaudeSettingsConfigured(data []byte) bool {
 
 type loadedClaudeSettings struct {
 	Config
-	AgentTeams string
+	AgentTeams  string
+	EffortLevel string
 }
 
 // loadConfigFromClaudeSettings 从 Claude Code settings.json 中读取本工具管理的配置。
@@ -1643,7 +1652,8 @@ func loadConfigFromClaudeSettings() loadedClaudeSettings {
 			SonnetModel: getString(envSonnetModel),
 			OpusModel:   getString(envOpusModel),
 		},
-		AgentTeams: getString(envAgentTeams),
+		AgentTeams:  getString(envAgentTeams),
+		EffortLevel: getString(envEffortLevel),
 	}
 }
 
@@ -1653,6 +1663,14 @@ func getManagedAgentTeamsValue() string {
 		return value
 	}
 	return loadConfigFromClaudeSettings().AgentTeams
+}
+
+// getManagedEffortLevelValue 返回受管的 Effort Level 配置值：优先系统环境变量，缺失时回退 Claude settings。
+func getManagedEffortLevelValue() string {
+	if value := getEnvVar(envEffortLevel); value != "" {
+		return value
+	}
+	return loadConfigFromClaudeSettings().EffortLevel
 }
 
 // winPathToWSL 将 Windows 路径（如 C:\Users\alice）转换为 WSL 挂载路径（/mnt/c/Users/alice）。
@@ -2487,14 +2505,15 @@ func selectTopMode() int {
 }
 
 // selectConfigMode 选择自定义配置的子模式
-// 返回值: 1 = 从头配置, 2 = 仅配置模型, 3 = 解决 400 报错, 4 = 配置实验性功能, 5 = 配置 VSCode 插件
+// 返回值: 1 = 从头配置, 2 = 仅配置模型, 3 = 解决 400 报错, 4 = 配置 Effort Level, 5 = 配置实验性功能, 6 = 配置 VSCode 插件
 func selectConfigMode() int {
 	return runItemMenu("自定义配置", []MenuItem{
 		{"1", "从头配置", "配置 URL、Token 和模型"},
 		{"2", "仅配置模型", "跳过 URL 和 Token 配置"},
 		{"3", "解决 400 报错", "禁用实验性请求头"},
-		{"4", "配置实验性功能", "启用/禁用 Agent Teams"},
-		{"5", "配置 VSCode 插件", "写入 VSCode settings.json"},
+		{"4", "配置 Effort Level", "设置最大思考等级"},
+		{"5", "配置实验性功能", "启用/禁用 Agent Teams"},
+		{"6", "配置 VSCode 插件", "写入 VSCode settings.json"},
 	})
 }
 
@@ -2860,8 +2879,8 @@ func runEnableDisableMenu(question string) bool {
 	if err != nil {
 		// 降级：非终端时用数字选项
 		printMenu(question, []MenuItem{
-			{"1", "启用", "开启 Agent Teams 功能"},
-			{"2", "禁用", "关闭 Agent Teams 功能"},
+			{"1", "启用", "开启此功能"},
+			{"2", "禁用", "关闭此功能"},
 		})
 		fmt.Println()
 		for {
@@ -2885,7 +2904,7 @@ func runEnableDisableMenu(question string) bool {
 		linesPrinted = renderConfirmMenuCore(
 			question,
 			[2]string{"启用", "禁用"},
-			[2]string{"开启 Agent Teams 功能", "关闭 Agent Teams 功能"},
+			[2]string{"开启此功能", "关闭此功能"},
 			selectedIdx,
 			linesPrinted,
 		)
@@ -3232,7 +3251,8 @@ func runRecommendedConfig() {
 	printInfo(fmt.Sprintf("Haiku 模型:       %s", recommendedHaikuModel))
 	printInfo(fmt.Sprintf("Sonnet 模型:      %s", recommendedSonnetModel))
 	printInfo(fmt.Sprintf("Opus 模型:        %s", recommendedOpusModel))
-	printInfo("将自动禁用实验性请求头，并配置 VSCode 插件")
+	printInfo(fmt.Sprintf("Effort Level:     max (%s=max)", envEffortLevel))
+	printInfo("将自动禁用实验性请求头、设置最大推理深度，并配置 VSCode 插件")
 	fmt.Println()
 
 	existing := loadExistingConfig()
@@ -3274,6 +3294,9 @@ func runRecommendedConfig() {
 		printSuccess("API 连接验证成功!")
 		break
 	}
+
+	// 提前注入 effort level，saveConfig 内的 buildManagedEnvMap 会读取并写入所有目标位置
+	os.Setenv(envEffortLevel, "max")
 
 	fmt.Println()
 	err := runWithSpinner("正在保存配置...", func() error {
@@ -3389,6 +3412,96 @@ func configureAgentTeams(exitOnDone bool) {
 	}
 }
 
+// configureEffortLevel 配置 CLAUDE_CODE_EFFORT_LEVEL 环境变量。
+// exitOnDone=true 时末尾显示"按回车键退出"（独立运行模式时使用）；
+// 嵌入后置步骤时传 false，由 main 统一处理退出。
+func configureEffortLevel(exitOnDone bool) {
+	printSectionHeader("配置 Effort Level（最大推理深度）")
+	fmt.Println()
+
+	currentVal := getManagedEffortLevelValue()
+	if currentVal != "" {
+		printInfo(fmt.Sprintf("当前状态: %s已设置 (%s)%s", colorBrightGreen, currentVal, colorReset))
+	} else {
+		printInfo(fmt.Sprintf("当前状态: %s未设置%s", colorRed, colorReset))
+	}
+	fmt.Println()
+	fmt.Printf("  CLAUDE_CODE_EFFORT_LEVEL=max 可让 Claude Code 使用最大推理深度，\n")
+	fmt.Printf("  获得更深入的分析和更高质量的代码输出。\n")
+	fmt.Println()
+	fmt.Printf("  关闭后将移除 CLAUDE_CODE_EFFORT_LEVEL 环境变量。\n")
+	fmt.Println()
+
+	enable := runEnableDisableMenu("是否启用 Effort Level=max")
+
+	fmt.Println()
+	var err error
+	if enable {
+		vars := map[string]string{envEffortLevel: "max"}
+		switch runtime.GOOS {
+		case "windows":
+			err = setEnvVarsWindows(vars)
+		default:
+			err = setEnvVarsUnix(vars)
+		}
+		if err != nil {
+			printError(fmt.Sprintf("设置失败: %v", err))
+		} else {
+			os.Setenv(envEffortLevel, "max")
+			if err := saveClaudeSettingsConfigWithAgentTeams(loadExistingConfig(), getManagedAgentTeamsValue()); err != nil {
+				printError(fmt.Sprintf("Claude settings 同步失败: %v", err))
+				os.Unsetenv(envEffortLevel)
+			} else {
+				printSuccess(fmt.Sprintf("已启用 %s=max", envEffortLevel))
+			}
+		}
+	} else {
+		if currentVal == "" {
+			printInfo("当前未设置该变量，无需操作")
+		} else {
+			switch runtime.GOOS {
+			case "windows":
+				err = removeEnvVarWindows(envEffortLevel)
+			default:
+				err = removeEnvVarUnix(envEffortLevel)
+			}
+			if err != nil {
+				printError(fmt.Sprintf("删除失败: %v", err))
+			} else {
+				os.Unsetenv(envEffortLevel)
+				if err := saveClaudeSettingsConfigWithAgentTeams(loadExistingConfig(), getManagedAgentTeamsValue()); err != nil {
+					printError(fmt.Sprintf("Claude settings 同步失败: %v", err))
+					os.Setenv(envEffortLevel, currentVal)
+				} else {
+					printSuccess(fmt.Sprintf("已禁用并删除 %s", envEffortLevel))
+				}
+			}
+		}
+	}
+
+	fmt.Println()
+	switch runtime.GOOS {
+	case "windows":
+		printTip("请重新打开终端窗口使配置生效")
+	default:
+		profile := detectShellProfile(runtime.GOOS)
+		if profile.sourceCmd != "" {
+			printTip(fmt.Sprintf("执行 %s 或重启终端使配置生效", profile.sourceCmd))
+		} else {
+			printTip("重启终端使配置生效")
+		}
+		if isWSL() {
+			fmt.Println()
+			printTip("注意：WSL 环境下，环境变量仅在当前 WSL 会话有效")
+			printTip("若需要 Windows 侧程序读取，请在 Windows 侧单独配置")
+		}
+	}
+	if exitOnDone {
+		fmt.Println()
+		styledInput("按回车键退出")
+	}
+}
+
 // printSummary 打印配置摘要
 func printSummary(cfg Config) {
 	fmt.Println()
@@ -3411,6 +3524,12 @@ func printSummary(cfg Config) {
 	agentTeamsDisplay, agentTeamsColor := "未启用", colorWhite
 	if getManagedAgentTeamsValue() == "1" {
 		agentTeamsDisplay, agentTeamsColor = "已启用", colorBrightGreen
+	}
+
+	// Effort Level：优先读取系统环境变量，缺失时回退 Claude settings
+	effortLevelDisplay, effortLevelColor := "未设置", colorWhite
+	if val := getManagedEffortLevelValue(); val != "" {
+		effortLevelDisplay, effortLevelColor = val, colorBrightGreen
 	}
 
 	// Claude Settings：解析 ~/.claude/settings.json，检测受管 env 是否存在
@@ -3442,6 +3561,7 @@ func printSummary(cfg Config) {
 		makeRow("Opus Model", cfg.OpusModel, colorCyan),
 		makeRow("Disable Betas", fixedDisableExperimentalBetas, colorMagenta),
 		makeRow("Agent Teams", agentTeamsDisplay, agentTeamsColor),
+		makeRow("Effort Level", effortLevelDisplay, effortLevelColor),
 		makeRow("Claude Settings", claudeSettingsDisplay, claudeSettingsColor),
 		makeRow("VSCode Plugin", vscodeDisplay, vscodeColor),
 	}
@@ -3496,10 +3616,27 @@ func maskToken(token string) string {
 	return string(runes[:4]) + "..." + string(runes[len(runes)-4:])
 }
 
-// checkClaudeCodeInstalled 检测 claude 命令是否已安装
+// checkClaudeCodeInstalled 检测 claude 命令是否已安装。
+// Windows 下依次尝试 claude / claude.cmd / claude.exe，全部失败后
+// 再用子进程运行 claude --version 作为最后兜底（兼容未注册 PATH 的安装）。
 func checkClaudeCodeInstalled() bool {
-	_, err := exec.LookPath("claude")
-	return err == nil
+	if _, err := exec.LookPath("claude"); err == nil {
+		return true
+	}
+	if runtime.GOOS == "windows" {
+		if _, err := exec.LookPath("claude.cmd"); err == nil {
+			return true
+		}
+		if _, err := exec.LookPath("claude.exe"); err == nil {
+			return true
+		}
+	}
+	// 兜底：直接运行 claude --version，命令存在但未在 PATH 中时仍可检测到
+	cmd := exec.Command("claude", "--version")
+	if err := cmd.Run(); err == nil {
+		return true
+	}
+	return false
 }
 
 // compareVersions 比较两个版本号字符串（major.minor.patch 格式）
@@ -3643,8 +3780,14 @@ func main() {
 			fmt.Println("  curl -fsSL https://claude.ai/install.sh | bash")
 		}
 		fmt.Println()
-		styledInput("按回车键退出")
-		os.Exit(1)
+		choice := runItemMenu("检测未通过，如何处理", []MenuItem{
+			{"1", "我已安装，跳过检测", "忽略检测结果，继续使用配置工具"},
+			{"2", "确认退出", "退出程序"},
+		})
+		if choice == 2 {
+			os.Exit(1)
+		}
+		fmt.Println()
 	}
 
 	// 检查版本更新（失败则静默跳过）
@@ -3740,9 +3883,12 @@ func main() {
 		printInfo("禁用实验性请求头，解决 Claude Code 400 传入请求头错误问题")
 		fmt.Println()
 	} else if configMode == 4 {
-		configureAgentTeams(true)
+		configureEffortLevel(true)
 		return
 	} else if configMode == 5 {
+		configureAgentTeams(true)
+		return
+	} else if configMode == 6 {
 		configureVSCode(cfg, true)
 		return
 	} else {
