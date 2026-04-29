@@ -107,7 +107,7 @@ var allEnvVarKeys = []string{
 
 // 版本号 / 盒子宽度保持 const（运行时不会变）
 const (
-	appVersion = "1.6.4"
+	appVersion = "1.6.5"
 	boxWidth   = 60
 )
 
@@ -3562,7 +3562,7 @@ func printSummary(cfg Config) {
 		makeRow("Disable Betas", fixedDisableExperimentalBetas, colorMagenta),
 		makeRow("Agent Teams", agentTeamsDisplay, agentTeamsColor),
 		makeRow("Effort Level", effortLevelDisplay, effortLevelColor),
-		makeRow("Claude Settings", claudeSettingsDisplay, claudeSettingsColor),
+		makeRow("settings.json", claudeSettingsDisplay, claudeSettingsColor),
 		makeRow("VSCode Plugin", vscodeDisplay, vscodeColor),
 	}
 	printBox("配置摘要", colorBrightWhite, lines)
