@@ -113,7 +113,7 @@ var allEnvVarKeys = []string{
 
 // 版本号 / 盒子宽度保持 const（运行时不会变）
 const (
-	appVersion = "1.6.7"
+	appVersion = "1.6.8"
 	boxWidth   = 60
 )
 
