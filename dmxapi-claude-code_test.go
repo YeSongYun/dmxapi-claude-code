@@ -360,6 +360,25 @@ func TestClaudeSettingsPathFor(t *testing.T) {
 	}
 }
 
+func TestApplyModelSuffix(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"claude-opus-4-8-cc", "claude-opus-4-8-cc[1m]"},     // 本次新增匹配
+		{"claude-opus-4-8", "claude-opus-4-8[1m]"},
+		{"claude-opus-4-7-cc", "claude-opus-4-7-cc[1m]"},     // 既有匹配保持
+		{"claude-sonnet-4-6-cc", "claude-sonnet-4-6-cc[1m]"}, // 既有匹配保持
+		{"claude-opus-4-8-cc[1m]", "claude-opus-4-8-cc[1m]"}, // 已有后缀幂等
+		{"claude-opus-4-6-cc", "claude-opus-4-6-cc"},         // 不匹配，原样返回
+		{"glm-5.1-cc", "glm-5.1-cc"},                         // 第三方模型原样返回
+	}
+	for _, c := range cases {
+		if got := applyModelSuffix(c.in); got != c.want {
+			t.Errorf("applyModelSuffix(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
 func TestBuildVSCodeEnvVars(t *testing.T) {
 	cfg := Config{
 		BaseURL:     "https://api.example.com",

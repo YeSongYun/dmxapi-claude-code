@@ -62,10 +62,10 @@ const (
 
 	// dmxapi 推荐配置（一键模式使用）
 	recommendedBaseURL     = "https://www.dmxapi.cn"
-	recommendedModel       = "claude-opus-4-7-cc"
+	recommendedModel       = "claude-opus-4-8-cc"
 	recommendedHaikuModel  = "claude-haiku-4-5-20251001-cc"
 	recommendedSonnetModel = "claude-sonnet-4-6-cc"
-	recommendedOpusModel   = "claude-opus-4-7-cc"
+	recommendedOpusModel   = "claude-opus-4-8-cc"
 
 	fixedDisableExperimentalBetas = "1"
 )
@@ -77,6 +77,9 @@ type presetModel struct {
 }
 
 var presetModels = []presetModel{
+	{"claude-opus-4-8-cc", "3.4 折"},
+	{"claude-opus-4-8", "6.8 折"},
+	{"claude-opus-4-8-ssvip", ""},
 	{"claude-opus-4-7-cc", "3.4 折"},
 	{"claude-opus-4-7", "6.8 折"},
 	{"claude-opus-4-7-ssvip", ""},
@@ -1360,12 +1363,12 @@ func vscodeSettingsPathFor(goos, homeDir, appData, wslWindowsHome string) string
 	}
 }
 
-// applyModelSuffix 对 claude-opus-4-7 和 claude-sonnet-4-6 系列模型 ID 追加 [1m] 后缀。
+// applyModelSuffix 对 claude-opus-4-8、claude-opus-4-7 和 claude-sonnet-4-6 系列模型 ID 追加 [1m] 后缀。
 func applyModelSuffix(id string) string {
 	if strings.HasSuffix(id, "[1m]") {
 		return id
 	}
-	if strings.Contains(id, "claude-opus-4-7") || strings.Contains(id, "claude-sonnet-4-6") {
+	if strings.Contains(id, "claude-opus-4-8") || strings.Contains(id, "claude-opus-4-7") || strings.Contains(id, "claude-sonnet-4-6") {
 		return id + "[1m]"
 	}
 	return id
