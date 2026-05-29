@@ -2224,9 +2224,10 @@ func clearFishUniversalVariables() clearResult {
 	return clearResult{Location: "Fish universal 变量", Status: "success", Message: fmt.Sprintf("已 erase %d 个 universal 变量", removed)}
 }
 
-// clearAllConfig 清除所有配置（模式6）。
+// clearAllConfig 清除所有配置。
 // 显示摘要 → 二次确认 → 逐位置清除 → 显示报告。
-func clearAllConfig() {
+// 返回 true 表示用户确认并执行了清除；false 表示用户取消。
+func clearAllConfig() bool {
 	printSectionHeader("清除所有配置")
 	fmt.Println()
 
@@ -2248,6 +2249,9 @@ func clearAllConfig() {
 	if path, err := getClaudeSettingsPath(); err == nil {
 		fmt.Printf("    • Claude Code settings.json (%s)\n", path)
 	}
+	if dir, err := dmxapiConfigDir(); err == nil {
+		fmt.Printf("    • 已保存的命名配置 (%s)\n", dir)
+	}
 	fmt.Println("    • 当前进程环境变量")
 	fmt.Println()
 	printInfo("涉及的环境变量：")
@@ -2262,7 +2266,7 @@ func clearAllConfig() {
 	if !styledConfirm("确定要清除所有配置吗") {
 		fmt.Println()
 		printInfo("已取消，未做任何更改")
-		return
+		return false
 	}
 
 	fmt.Println()
@@ -2371,6 +2375,7 @@ func clearAllConfig() {
 	} else {
 		printTip("重新打开终端后配置清除完全生效")
 	}
+	return true
 }
 
 // configureVSCode 模式5交互流程：展示将写入的配置，用户确认后写入 VSCode settings.json。
@@ -4358,7 +4363,9 @@ func runClearConfigMenu() {
 	})
 	switch choice {
 	case 1:
-		clearAllConfig()
+		if !clearAllConfig() {
+			return // 用户在二次确认时取消，命名配置也不删除
+		}
 		if n, err := deleteAllNamedConfigs(); err != nil {
 			printWarning(fmt.Sprintf("删除命名配置文件失败: %v", err))
 		} else if n > 0 {
