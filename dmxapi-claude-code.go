@@ -516,8 +516,24 @@ func printMenu(title string, items []MenuItem) {
 func styledInput(label string) string {
 	fmt.Printf("  %s%s%s %s%s:%s ", colorBrightCyan, iconPrompt, colorReset, styleBold, label, colorReset)
 	reader := bufio.NewReader(os.Stdin)
-	input, _ := reader.ReadString('\n')
+	input, err := reader.ReadString('\n')
+	if err != nil && input == "" {
+		// stdin 已到 EOF 且无任何输入（如非交互管道/输入流关闭）：
+		// 继续交互无意义，优雅退出，避免上层循环空转刷屏。
+		exitOnInputEOF()
+	}
 	return strings.TrimSpace(input)
+}
+
+// exitOnInputEOF 在标准输入到达 EOF 无法继续交互时，恢复终端并退出程序。
+func exitOnInputEOF() {
+	if rawModeState != nil {
+		term.Restore(int(syscall.Stdin), rawModeState)
+	}
+	restoreConsole()
+	fmt.Println()
+	printError("输入已结束，已退出")
+	os.Exit(1)
 }
 
 // styledPassword 带样式提示符的隐藏输入
@@ -533,7 +549,10 @@ func styledPassword(label string) string {
 		return strings.TrimSpace(string(pw))
 	}
 	reader := bufio.NewReader(os.Stdin)
-	input, _ := reader.ReadString('\n')
+	input, err := reader.ReadString('\n')
+	if err != nil && input == "" {
+		exitOnInputEOF()
+	}
 	return strings.TrimSpace(input)
 }
 
