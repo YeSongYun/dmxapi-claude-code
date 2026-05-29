@@ -606,9 +606,13 @@ func styledInputWithEsc(label string) (value string, esc bool) {
 		case 0x7F, 0x08: // 退格：按 rune 删除末尾（避免删半个多字节字符）
 			if len(buf) > 0 {
 				runes := []rune(string(buf))
+				last := runes[len(runes)-1]
 				runes = runes[:len(runes)-1]
 				buf = []byte(string(runes))
-				fmt.Print("\b \b")
+				// 按被删字符的显示宽度回退对应列数（中文占 2 列）
+				for i := 0; i < runeWidth(last); i++ {
+					fmt.Print("\b \b")
+				}
 			}
 		default:
 			if b >= 0x20 { // 可打印字节：累积并回显。逐字节读取+原样写出天然兼容 UTF-8
