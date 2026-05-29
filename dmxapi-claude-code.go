@@ -525,6 +525,100 @@ func styledInput(label string) string {
 	return strings.TrimSpace(input)
 }
 
+// isBackToken 判断文本输入是否为"返回上一步"指令（大小写不敏感）。
+// 仅用于菜单降级路径与模型名输入，绝不用于配置名称步骤。
+func isBackToken(s string) bool {
+	t := strings.ToLower(strings.TrimSpace(s))
+	return t == "b" || t == "back"
+}
+
+// styledInputWithBack 带返回功能的文本输入。
+// back=true 表示用户输入 b/back 要返回上一步；否则返回 (已 TrimSpace 的输入, false)。
+// 空串语义（保留现值）仍由调用方按 value=="" 判断。
+func styledInputWithBack(label string) (value string, back bool) {
+	in := styledInput(label) // 复用：含 EOF 退出 + TrimSpace
+	if isBackToken(in) {
+		return "", true
+	}
+	return in, false
+}
+
+// styledInputWithEsc 带样式提示符的单行文本输入，支持按 ESC 返回上一步（esc=true）。
+// 用于配置名称这类“自由文本但需可返回”的步骤：名称可能恰好是 b/back，故不能用
+// isBackToken 文本指令判断，必须以 ESC 键作为返回信号。
+//
+// 仅在 raw 模式可用的非 Windows 终端下提供 ESC 返回；Windows / 非终端 /
+// enterRawMode 失败时降级为普通 styledInput（不支持返回，回车正常前进）。
+// 降级原因见 console_windows.go：readConsoleKey 丢弃 UnicodeChar，无法用于文本输入。
+func styledInputWithEsc(label string) (value string, esc bool) {
+	// Windows 无法复用现有 raw 抽象读取字符，直接降级（不支持返回）
+	if runtime.GOOS == "windows" {
+		return styledInput(label), false
+	}
+	// 先打印提示符（含 Esc 返回提示），再进入 raw 模式逐字节读取
+	fmt.Printf("  %s%s%s %s%s:%s %sEsc 返回%s ",
+		colorBrightCyan, iconPrompt, colorReset, styleBold, label, colorReset, styleDim, colorReset)
+
+	restore, err := enterRawMode()
+	if err != nil {
+		// 降级：raw 模式不可用（非终端 / legacy 控制台）。提示符已打印，直接读整行。
+		reader := bufio.NewReader(os.Stdin)
+		in, rerr := reader.ReadString('\n')
+		if rerr != nil && in == "" {
+			exitOnInputEOF()
+		}
+		return strings.TrimSpace(in), false
+	}
+
+	var buf []byte
+	one := make([]byte, 1)
+	for {
+		n, rerr := os.Stdin.Read(one)
+		if n == 0 || rerr != nil {
+			restore()
+			fmt.Print("\r\n")
+			// 无更多输入：与 styledInput 的 EOF 行为对齐
+			if len(buf) == 0 {
+				exitOnInputEOF()
+			}
+			return strings.TrimSpace(string(buf)), false
+		}
+		switch b := one[0]; b {
+		case 0x1B: // ESC：单独按下视为返回；后随转义序列（方向键等）则忽略
+			if stdinBytesAvailable() == 0 {
+				restore()
+				fmt.Print("\r\n")
+				return "", true
+			}
+			rest := make([]byte, 2)
+			os.Stdin.Read(rest) // 读掉并忽略后续转义字节
+		case 0x0D, 0x0A: // 回车：完成输入
+			restore()
+			fmt.Print("\r\n")
+			return strings.TrimSpace(string(buf)), false
+		case 0x03: // Ctrl+C：与 readRawKey 一致，恢复终端后退出
+			if rawModeState != nil {
+				term.Restore(int(syscall.Stdin), rawModeState)
+				fmt.Println()
+			}
+			restoreConsole()
+			os.Exit(130)
+		case 0x7F, 0x08: // 退格：按 rune 删除末尾（避免删半个多字节字符）
+			if len(buf) > 0 {
+				runes := []rune(string(buf))
+				runes = runes[:len(runes)-1]
+				buf = []byte(string(runes))
+				fmt.Print("\b \b")
+			}
+		default:
+			if b >= 0x20 { // 可打印字节：累积并回显。逐字节读取+原样写出天然兼容 UTF-8
+				buf = append(buf, b)
+				os.Stdout.Write(one) // 按字节回显，终端自行组装多字节字符
+			}
+		}
+	}
+}
+
 // exitOnInputEOF 在标准输入到达 EOF 无法继续交互时，恢复终端并退出程序。
 func exitOnInputEOF() {
 	if rawModeState != nil {
@@ -557,8 +651,9 @@ func styledPassword(label string) string {
 }
 
 // styledConfirm 带样式提示符的确认菜单
-func styledConfirm(label string) bool {
-	return runConfirmMenu(label)
+// allowBack=true 时支持 ESC / b 返回上一步（back=true）。
+func styledConfirm(label string, allowBack bool) (confirmed bool, back bool) {
+	return runConfirmMenu(label, allowBack)
 }
 
 // ==================== 输入处理 ====================
@@ -2010,7 +2105,7 @@ func saveVSCodeConfig(cfg Config) error {
 	if err != nil {
 		// JSON 解析失败：询问是否备份重建
 		printError(fmt.Sprintf("settings.json 解析失败: %v", err))
-		if !styledConfirm("是否备份原文件并重新创建") {
+		if ok, _ := styledConfirm("是否备份原文件并重新创建", false); !ok {
 			return fmt.Errorf("用户取消：保留原文件，跳过写入")
 		}
 		backupPath := settingsPath + ".bak"
@@ -2282,7 +2377,7 @@ func clearAllConfig() bool {
 	printWarning("此操作不可撤销，Auth Token 清除后需要重新获取")
 	fmt.Println()
 
-	if !styledConfirm("确定要清除所有配置吗") {
+	if ok, _ := styledConfirm("确定要清除所有配置吗", false); !ok {
 		fmt.Println()
 		printInfo("已取消，未做任何更改")
 		return false
@@ -2434,7 +2529,7 @@ func configureVSCode(cfg Config, exitOnDone bool) {
 	}
 	fmt.Println()
 
-	if !styledConfirm("确认写入 VSCode settings.json") {
+	if ok, _ := styledConfirm("确认写入 VSCode settings.json", false); !ok {
 		printInfo("已取消")
 		if exitOnDone {
 			fmt.Println()
@@ -2688,22 +2783,29 @@ func loadExistingConfig() Config {
 	return cfg
 }
 
-// getNewBaseURL 获取新的 Base URL
-func getNewBaseURL(existing string) string {
+// getNewBaseURL 获取新的 Base URL。allowBack=true 时支持返回上一步（back=true）。
+func getNewBaseURL(existing string, allowBack bool) (string, bool) {
 	printSectionHeader("配置 API 服务器地址")
 	fmt.Println("  示例: https://www.dmxapi.cn")
 
 	if existing != "" {
 		fmt.Printf("  当前值: %s\n", existing)
-		if !styledConfirm("是否修改 Base URL") {
-			return existing
+		ok, back := styledConfirm("是否修改 Base URL", allowBack)
+		if allowBack && back {
+			return existing, true
+		}
+		if !ok {
+			return existing, false
 		}
 	}
 
 	for {
-		input := styledInput("Base URL")
+		input, back := styledInputWithBack("Base URL")
+		if allowBack && back {
+			return existing, true
+		}
 		if input == "" && existing != "" {
-			return existing
+			return existing, false
 		}
 
 		input = ensureScheme(input)
@@ -2712,12 +2814,12 @@ func getNewBaseURL(existing string) string {
 			continue
 		}
 
-		return input
+		return input, false
 	}
 }
 
-// getNewAuthToken 获取新的 Auth Token
-func getNewAuthToken(existing, hostname string) string {
+// getNewAuthToken 获取新的 Auth Token。allowBack=true 时支持返回上一步（back=true）。
+func getNewAuthToken(existing, hostname string, allowBack bool) (string, bool) {
 	printSectionHeader("配置 API 认证令牌")
 
 	if hostname != "" {
@@ -2726,22 +2828,29 @@ func getNewAuthToken(existing, hostname string) string {
 
 	if existing != "" {
 		fmt.Printf("  当前已配置 Token: %s\n", maskToken(existing))
-		if !styledConfirm("是否更新 Token") {
-			return existing
+		ok, back := styledConfirm("是否更新 Token", allowBack)
+		if allowBack && back {
+			return existing, true
+		}
+		if !ok {
+			return existing, false
 		}
 	}
 
 	for {
-		input := styledInput("Auth Token")
+		input, back := styledInputWithBack("Auth Token")
+		if allowBack && back {
+			return existing, true
+		}
 		if input == "" {
 			if existing != "" {
-				return existing
+				return existing, false
 			}
 			printError("Token 不能为空")
 			continue
 		}
 
-		return strings.TrimSpace(input)
+		return strings.TrimSpace(input), false
 	}
 }
 
@@ -2790,7 +2899,7 @@ func selectTopModeDynamic() topMenuChoice {
 		MenuItem{strconv.Itoa(n + 3), "清除配置", "清除全部或单个已保存配置"},
 	)
 
-	idx := runItemMenu("请选择配置方式", items)
+	idx, _ := runItemMenu("请选择配置方式", items, false)
 	kind := mapTopMenuIndex(idx, n)
 	choice := topMenuChoice{kind: kind}
 	if kind == topNamed {
@@ -2811,21 +2920,25 @@ func namedConfigDesc(c NamedConfig) string {
 	return host
 }
 
-// selectFixOption 让用户选择要修改的内容
-func selectFixOption() int {
+// selectFixOption 让用户选择要修改的内容。allowBack=true 时支持返回（back=true）。
+func selectFixOption(allowBack bool) (int, bool) {
 	return runItemMenu("选择要修改的内容", []MenuItem{
 		{"1", "修改 URL", "Base URL 有问题"},
 		{"2", "修改 Key", "API Key 有问题"},
 		{"3", "都修改", "URL 和 Key 都有问题"},
 		{"4", "修改模型名", "模型名称可能不正确"},
 		{"5", "强制配置", "跳过验证，直接保存当前配置"},
-	})
+	}, allowBack)
 }
 
-// inputNewBaseURL 输入新的 Base URL（无需确认是否修改）
-func inputNewBaseURL() string {
+// inputNewBaseURL 输入新的 Base URL（无需确认是否修改）。
+// allowBack=true 时输入 b/back 返回（back=true）。
+func inputNewBaseURL(allowBack bool) (string, bool) {
 	for {
-		input := styledInput("新 Base URL")
+		input, back := styledInputWithBack("新 Base URL")
+		if allowBack && back {
+			return "", true
+		}
 		if input == "" {
 			printError("URL 不能为空")
 			continue
@@ -2835,27 +2948,31 @@ func inputNewBaseURL() string {
 			printError(err.Error())
 			continue
 		}
-		return input
+		return input, false
 	}
 }
 
-// inputNewAuthToken 输入新的 Auth Token（无需确认是否修改）
-func inputNewAuthToken(hostname string) string {
+// inputNewAuthToken 输入新的 Auth Token（无需确认是否修改）。
+// allowBack=true 时输入 b/back 返回（back=true）。
+func inputNewAuthToken(hostname string, allowBack bool) (string, bool) {
 	if hostname != "" {
 		fmt.Printf("  获取地址: https://%s/token\n", hostname)
 	}
 	for {
-		input := styledInput("新 Auth Token")
+		input, back := styledInputWithBack("新 Auth Token")
+		if allowBack && back {
+			return "", true
+		}
 		if input == "" {
 			printError("Token 不能为空")
 			continue
 		}
-		return strings.TrimSpace(input)
+		return strings.TrimSpace(input), false
 	}
 }
 
 // renderItemMenu 渲染通用条目菜单，返回渲染行数（len(items)+6）
-func renderItemMenu(title string, items []MenuItem, selectedIdx int, linesPrinted int) int {
+func renderItemMenu(title string, items []MenuItem, selectedIdx int, linesPrinted int, allowBack bool) int {
 	if linesPrinted > 0 {
 		fmt.Printf("\033[%dA", linesPrinted)
 	}
@@ -2890,28 +3007,40 @@ func renderItemMenu(title string, items []MenuItem, selectedIdx int, linesPrinte
 	}
 	fmt.Printf("%s%s%s\033[K\r\n", boxBL, border, boxBR)
 	fmt.Printf("\033[K\r\n")
-	fmt.Printf("  %s%s%s 导航%s  %sEnter 确认%s\033[K\r\n",
-		styleDim, iconNavUp, iconNavDown, colorReset, styleDim, colorReset)
+	if allowBack {
+		fmt.Printf("  %s%s%s 导航%s  %sEnter 确认%s  %sEsc 返回%s\033[K\r\n",
+			styleDim, iconNavUp, iconNavDown, colorReset, styleDim, colorReset, styleDim, colorReset)
+	} else {
+		fmt.Printf("  %s%s%s 导航%s  %sEnter 确认%s\033[K\r\n",
+			styleDim, iconNavUp, iconNavDown, colorReset, styleDim, colorReset)
+	}
 	return len(items) + 6
 }
 
-// runItemMenu 运行通用条目菜单，返回1-based选中索引
-func runItemMenu(title string, items []MenuItem) int {
+// runItemMenu 运行通用条目菜单，返回1-based选中索引。
+// allowBack=true 时支持 ESC / b 返回上一步（back=true，此时 idx 无意义返回 0）。
+func runItemMenu(title string, items []MenuItem, allowBack bool) (int, bool) {
 	n := len(items)
 	restore, err := enterRawMode()
 	if err != nil {
 		// 降级：数字输入
 		printMenu(title, items)
 		fmt.Println()
+		if allowBack {
+			printInfo("输入对应数字选择，或输入 b 返回上一步")
+		}
 		validKeys := make([]string, n)
 		for i := range items {
 			validKeys[i] = items[i].Key
 		}
 		for {
 			input := styledInput("选项")
+			if allowBack && isBackToken(input) {
+				return 0, true
+			}
 			for i, k := range validKeys {
 				if input == k {
-					return i + 1
+					return i + 1, false
 				}
 			}
 			printError(fmt.Sprintf("无效选项，请输入 %s", strings.Join(validKeys, "、")))
@@ -2922,7 +3051,7 @@ func runItemMenu(title string, items []MenuItem) int {
 	selectedIdx := 0
 	linesPrinted := 0
 	for {
-		linesPrinted = renderItemMenu(title, items, selectedIdx, linesPrinted)
+		linesPrinted = renderItemMenu(title, items, selectedIdx, linesPrinted, allowBack)
 		key := readRawKey()
 		switch key {
 		case KeyUp:
@@ -2932,9 +3061,15 @@ func runItemMenu(title string, items []MenuItem) int {
 		case KeyEnter:
 			restore()
 			clearMenuLines(linesPrinted)
-			return selectedIdx + 1
+			return selectedIdx + 1, false
+		case KeyEsc:
+			if allowBack {
+				restore()
+				clearMenuLines(linesPrinted)
+				return 0, true
+			}
+			// allowBack=false：忽略 ESC（顶层主菜单必须做出选择）
 		}
-		// ESC 不允许退出（必须做出选择），忽略
 	}
 }
 
@@ -3056,7 +3191,7 @@ func clearMenuLines(n int) {
 
 // renderConfirmMenuCore 渲染确认菜单核心逻辑，返回渲染行数（固定8行）
 // selectedIdx: 0=选项1, 1=选项2
-func renderConfirmMenuCore(question string, labels [2]string, descs [2]string, selectedIdx int, linesPrinted int) int {
+func renderConfirmMenuCore(question string, labels [2]string, descs [2]string, selectedIdx int, linesPrinted int, allowBack bool) int {
 	if linesPrinted > 0 {
 		fmt.Printf("\033[%dA", linesPrinted)
 	}
@@ -3101,26 +3236,34 @@ func renderConfirmMenuCore(question string, labels [2]string, descs [2]string, s
 
 	fmt.Printf("%s%s%s\033[K\r\n", boxBL, border, boxBR)
 	fmt.Printf("\033[K\r\n")
-	fmt.Printf("  %s%s%s 导航%s  %sEnter 确认%s\033[K\r\n",
-		styleDim, iconNavUp, iconNavDown, colorReset, styleDim, colorReset)
+	if allowBack {
+		fmt.Printf("  %s%s%s 导航%s  %sEnter 确认%s  %sEsc 返回%s\033[K\r\n",
+			styleDim, iconNavUp, iconNavDown, colorReset, styleDim, colorReset, styleDim, colorReset)
+	} else {
+		fmt.Printf("  %s%s%s 导航%s  %sEnter 确认%s\033[K\r\n",
+			styleDim, iconNavUp, iconNavDown, colorReset, styleDim, colorReset)
+	}
 	return 8
 }
 
 // renderConfirmMenu 渲染默认确认菜单（是/否），返回渲染行数（固定8行）
 // selectedIdx: 0=是, 1=否
-func renderConfirmMenu(question string, selectedIdx int, linesPrinted int) int {
+func renderConfirmMenu(question string, selectedIdx int, linesPrinted int, allowBack bool) int {
 	return renderConfirmMenuCore(
 		question,
 		[2]string{"是", "否"},
 		[2]string{"确认修改", "保持当前值不变"},
 		selectedIdx,
 		linesPrinted,
+		allowBack,
 	)
 }
 
 // runConfirmMenu 运行确认菜单，返回是否确认（true=是，false=否）
-// 默认选中"否"（与原来 y/N 默认 No 行为一致）
-func runConfirmMenu(question string) bool {
+// 默认选中"否"（与原来 y/N 默认 No 行为一致）。
+// allowBack=true 时 ESC / b 返回上一步（back=true）；
+// allowBack=false 时 ESC 维持原语义（返回 false，等价于"否"）。
+func runConfirmMenu(question string, allowBack bool) (confirmed bool, back bool) {
 	restore, err := enterRawMode()
 	if err != nil {
 		// 降级：非终端时用数字选项
@@ -3129,13 +3272,19 @@ func runConfirmMenu(question string) bool {
 			{"2", "否", "保持当前值不变"},
 		})
 		fmt.Println()
+		if allowBack {
+			printInfo("输入 1 或 2，或输入 b 返回上一步")
+		}
 		for {
 			input := styledInput("选项")
+			if allowBack && isBackToken(input) {
+				return false, true
+			}
 			switch input {
 			case "1":
-				return true
+				return true, false
 			case "2":
-				return false
+				return false, false
 			default:
 				printError("请输入 1 或 2")
 			}
@@ -3147,7 +3296,7 @@ func runConfirmMenu(question string) bool {
 	linesPrinted := 0
 
 	for {
-		linesPrinted = renderConfirmMenu(question, selectedIdx, linesPrinted)
+		linesPrinted = renderConfirmMenu(question, selectedIdx, linesPrinted, allowBack)
 		key := readRawKey()
 		switch key {
 		case KeyUp:
@@ -3157,18 +3306,23 @@ func runConfirmMenu(question string) bool {
 		case KeyEnter:
 			restore()
 			clearMenuLines(linesPrinted)
-			return selectedIdx == 0
+			return selectedIdx == 0, false
 		case KeyEsc:
 			restore()
 			clearMenuLines(linesPrinted)
-			return false
+			if allowBack {
+				return false, true
+			}
+			return false, false
 		}
 	}
 }
 
 // runEnableDisableMenu 运行启用/禁用确认菜单，返回是否启用（true=启用，false=禁用）
-// 默认选中"禁用"（索引1）
-func runEnableDisableMenu(question string) bool {
+// 默认选中"禁用"（索引1）。
+// allowBack=true 时 ESC / b 返回上一步（back=true）；
+// allowBack=false 时 ESC 维持原语义（返回 false，等价于"禁用"）。
+func runEnableDisableMenu(question string, allowBack bool) (enabled bool, back bool) {
 	restore, err := enterRawMode()
 	if err != nil {
 		// 降级：非终端时用数字选项
@@ -3177,13 +3331,19 @@ func runEnableDisableMenu(question string) bool {
 			{"2", "禁用", "关闭此功能"},
 		})
 		fmt.Println()
+		if allowBack {
+			printInfo("输入 1 或 2，或输入 b 返回上一步")
+		}
 		for {
 			input := styledInput("选项")
+			if allowBack && isBackToken(input) {
+				return false, true
+			}
 			switch input {
 			case "1":
-				return true
+				return true, false
 			case "2":
-				return false
+				return false, false
 			default:
 				printError("请输入 1 或 2")
 			}
@@ -3201,6 +3361,7 @@ func runEnableDisableMenu(question string) bool {
 			[2]string{"开启此功能", "关闭此功能"},
 			selectedIdx,
 			linesPrinted,
+			allowBack,
 		)
 		key := readRawKey()
 		switch key {
@@ -3211,17 +3372,20 @@ func runEnableDisableMenu(question string) bool {
 		case KeyEnter:
 			restore()
 			clearMenuLines(linesPrinted)
-			return selectedIdx == 0
+			return selectedIdx == 0, false
 		case KeyEsc:
 			restore()
 			clearMenuLines(linesPrinted)
-			return false
+			if allowBack {
+				return false, true
+			}
+			return false, false
 		}
 	}
 }
 
 // renderL1Menu 渲染一级菜单，返回渲染行数（固定10行）
-func renderL1Menu(entries []modelTypeEntry, selectedIdx int, linesPrinted int) int {
+func renderL1Menu(entries []modelTypeEntry, selectedIdx int, linesPrinted int, allowBack bool) int {
 	if linesPrinted > 0 {
 		fmt.Printf("\033[%dA", linesPrinted)
 	}
@@ -3268,8 +3432,13 @@ func renderL1Menu(entries []modelTypeEntry, selectedIdx int, linesPrinted int) i
 
 	fmt.Printf("%s%s%s\033[K\r\n", boxBL, border, boxBR)
 	fmt.Printf("\033[K\r\n")
-	fmt.Printf("  %s%s%s 导航%s  %sEnter 配置%s  %sq/Esc 保存退出%s\033[K\r\n",
-		styleDim, iconNavUp, iconNavDown, colorReset, styleDim, colorReset, styleDim, colorReset)
+	if allowBack {
+		fmt.Printf("  %s%s%s 导航%s  %sEnter 配置%s  %sq/Esc 返回上一步%s\033[K\r\n",
+			styleDim, iconNavUp, iconNavDown, colorReset, styleDim, colorReset, styleDim, colorReset)
+	} else {
+		fmt.Printf("  %s%s%s 导航%s  %sEnter 配置%s  %sq/Esc 完成%s\033[K\r\n",
+			styleDim, iconNavUp, iconNavDown, colorReset, styleDim, colorReset, styleDim, colorReset)
+	}
 	return len(entries) + 6
 }
 
@@ -3346,15 +3515,25 @@ func renderL2Menu(typeName string, currentValue string, selectedIdx int, linesPr
 }
 
 // runL2Menu 运行二级菜单，返回选中的模型名
-func runL2Menu(typeName, currentValue string) string {
+// runL2Menu 运行二级菜单，返回选中的模型名。
+// ESC 恒为"取消修改、停留上层"（返回 currentValue, back=false）。
+// allowBack=true 时，降级/自定义文本输入额外识别 b/back 触发返回（back=true）。
+func runL2Menu(typeName, currentValue string, allowBack bool) (string, bool) {
 	restore, err := enterRawMode()
 	if err != nil {
 		// 降级：直接文本输入
-		val := styledInput(typeName + " (输入模型名，留空不改)")
-		if val == "" {
-			return currentValue
+		hint := "(输入模型名，留空不改)"
+		if allowBack {
+			hint = "(输入模型名，留空不改，b 返回)"
 		}
-		return val
+		val, back := styledInputWithBack(typeName + " " + hint)
+		if allowBack && back {
+			return currentValue, true
+		}
+		if val == "" {
+			return currentValue, false
+		}
+		return val, false
 	}
 	defer restore()
 
@@ -3377,23 +3556,31 @@ func runL2Menu(typeName, currentValue string) string {
 			clearMenuLines(linesPrinted)
 			if idx == len(presetModels) {
 				// 自定义输入
-				val := styledInput(typeName + " (自定义)")
-				if val == "" {
-					return currentValue
+				hint := "(自定义)"
+				if allowBack {
+					hint = "(自定义，b 返回)"
 				}
-				return val
+				val, back := styledInputWithBack(typeName + " " + hint)
+				if allowBack && back {
+					return currentValue, true
+				}
+				if val == "" {
+					return currentValue, false
+				}
+				return val, false
 			}
-			return presetModels[idx].ID
+			return presetModels[idx].ID, false
 		case KeyEsc:
 			restore()
 			clearMenuLines(linesPrinted)
-			return currentValue
+			return currentValue, false // 取消修改，停留上层（back 恒 false）
 		}
 	}
 }
 
-// runL1Menu 运行一级菜单
-func runL1Menu(cfg *Config) {
+// runL1Menu 运行一级菜单。allowBack=true 时 q/Esc 返回上一步（back=true）；
+// allowBack=false 时 q/Esc 表示"完成"（back=false）。
+func runL1Menu(cfg *Config, allowBack bool) bool {
 	entries := []modelTypeEntry{
 		{"默认模型", &cfg.Model},
 		{"Haiku 模型", &cfg.HaikuModel},
@@ -3403,8 +3590,7 @@ func runL1Menu(cfg *Config) {
 
 	restore, err := enterRawMode()
 	if err != nil {
-		configureModelsFallback(cfg)
-		return
+		return configureModelsFallback(cfg, allowBack)
 	}
 	defer restore()
 
@@ -3412,7 +3598,7 @@ func runL1Menu(cfg *Config) {
 	linesPrinted := 0
 
 	for {
-		linesPrinted = renderL1Menu(entries, selectedIdx, linesPrinted)
+		linesPrinted = renderL1Menu(entries, selectedIdx, linesPrinted, allowBack)
 		key := readRawKey()
 		switch key {
 		case KeyUp:
@@ -3422,7 +3608,8 @@ func runL1Menu(cfg *Config) {
 		case KeyEnter:
 			restore()
 			clearMenuLines(linesPrinted)
-			newVal := runL2Menu(entries[selectedIdx].Label, *entries[selectedIdx].ValuePtr)
+			// L2 为层内子菜单，不需 b/back 返回（其 ESC 已表示取消修改）
+			newVal, _ := runL2Menu(entries[selectedIdx].Label, *entries[selectedIdx].ValuePtr, false)
 			*entries[selectedIdx].ValuePtr = newVal
 			// 重进 raw 模式
 			var rerr error
@@ -3434,13 +3621,14 @@ func runL1Menu(cfg *Config) {
 		case KeyEsc:
 			restore()
 			clearMenuLines(linesPrinted)
-			return
+			return allowBack // allowBack=true → 返回上一步；否则完成
 		}
 	}
 }
 
-// configureModelsFallback 降级模型配置（文本输入模式）
-func configureModelsFallback(cfg *Config) {
+// configureModelsFallback 降级模型配置（文本输入模式）。
+// allowBack=true 时仅"是否修改模型配置"确认支持返回；各模型名输入不支持回退。
+func configureModelsFallback(cfg *Config, allowBack bool) bool {
 	fmt.Println()
 	fmt.Println("当前模型配置:")
 	fmt.Printf("  %-35s = %s\n", envModel, cfg.Model)
@@ -3448,8 +3636,12 @@ func configureModelsFallback(cfg *Config) {
 	fmt.Printf("  %-35s = %s\n", envSonnetModel, cfg.SonnetModel)
 	fmt.Printf("  %-35s = %s\n", envOpusModel, cfg.OpusModel)
 
-	if !styledConfirm("是否修改模型配置") {
-		return
+	ok, back := styledConfirm("是否修改模型配置", allowBack)
+	if allowBack && back {
+		return true
+	}
+	if !ok {
+		return false
 	}
 
 	fmt.Println()
@@ -3472,10 +3664,11 @@ func configureModelsFallback(cfg *Config) {
 	if input != "" {
 		cfg.OpusModel = input
 	}
+	return false
 }
 
-// configureModels 配置模型
-func configureModels(cfg *Config) {
+// configureModels 配置模型。allowBack 透传给 L1 菜单（true 时 q/Esc 返回上一步，back=true）。
+func configureModels(cfg *Config, allowBack bool) bool {
 	// 填充默认值
 	if cfg.Model == "" {
 		cfg.Model = defaultModel
@@ -3493,10 +3686,13 @@ func configureModels(cfg *Config) {
 	printSectionHeader("配置模型设置")
 	fmt.Println()
 
-	runL1Menu(cfg)
+	if runL1Menu(cfg, allowBack) {
+		return true // 返回上一步
+	}
 
 	fmt.Println()
 	printSuccess("模型配置已完成")
+	return false
 }
 
 // saveConfig 保存配置（同时写入系统环境变量与 Claude settings）。
@@ -3537,7 +3733,8 @@ func saveConfig(cfg Config) error {
 
 // runRecommendedConfig 推荐配置一键流程：只输入 key，其他参数使用 dmxapi 推荐默认值，
 // 并自动写入 Claude settings、系统环境变量与 VSCode settings.json。
-func runRecommendedConfig() {
+// 返回 back=true 表示用户在 Token 输入或验证失败菜单按 ESC 返回主菜单。
+func runRecommendedConfig() (back bool) {
 	printSectionHeader("dmxapi 推荐配置 (Claude Opus 4.8)")
 	fmt.Println()
 	printInfo(fmt.Sprintf("Base URL:         %s", recommendedBaseURL))
@@ -3552,7 +3749,10 @@ func runRecommendedConfig() {
 	existing := loadExistingConfig()
 	hostname := extractHost(recommendedBaseURL)
 
-	authToken := getNewAuthToken(existing.AuthToken, hostname)
+	authToken, b := getNewAuthToken(existing.AuthToken, hostname, true)
+	if b {
+		return true // Token 输入返回 → 回主菜单
+	}
 
 	cfg := Config{
 		BaseURL:     recommendedBaseURL,
@@ -3573,12 +3773,20 @@ func runRecommendedConfig() {
 			fmt.Printf("  API Key:  %s\n", cfg.AuthToken)
 			fmt.Println()
 
-			choice := runItemMenu("API 验证失败，如何处理", []MenuItem{
+			choice, cb := runItemMenu("API 验证失败，如何处理", []MenuItem{
 				{"1", "修改 Key", "重新输入 API Key"},
 				{"2", "强制保存", "跳过验证直接保存当前配置"},
-			})
+			}, true)
+			if cb {
+				return true // 验证失败菜单返回 → 放弃推荐配置，回主菜单
+			}
 			if choice == 1 {
-				cfg.AuthToken = inputNewAuthToken(hostname)
+				tok, tb := inputNewAuthToken(hostname, true)
+				if tb {
+					fmt.Println()
+					continue // 放弃改 Key → 重新验证
+				}
+				cfg.AuthToken = tok
 				fmt.Println()
 				continue
 			}
@@ -3613,6 +3821,7 @@ func runRecommendedConfig() {
 	}
 
 	printSummary(cfg)
+	return false
 }
 
 // configureAgentTeams 配置实验性 Agent Teams 功能环境变量。
@@ -3636,7 +3845,7 @@ func configureAgentTeams(exitOnDone bool) {
 	fmt.Printf("  环境变量，Agent Teams 功能将停止工作。\n")
 	fmt.Println()
 
-	enable := runEnableDisableMenu("是否启用 Agent Teams 功能")
+	enable, _ := runEnableDisableMenu("是否启用 Agent Teams 功能", false)
 
 	fmt.Println()
 	var err error
@@ -3726,7 +3935,7 @@ func configureEffortLevel(exitOnDone bool) {
 	fmt.Printf("  关闭后将移除 CLAUDE_CODE_EFFORT_LEVEL 环境变量。\n")
 	fmt.Println()
 
-	enable := runEnableDisableMenu("是否启用 Effort Level=ultracode")
+	enable, _ := runEnableDisableMenu("是否启用 Effort Level=ultracode", false)
 
 	fmt.Println()
 	var err error
@@ -4025,7 +4234,7 @@ func checkForUpdates() {
 	fmt.Println()
 	printInfo(fmt.Sprintf("发现新版本 v%s（当前 v%s）", latest, appVersion))
 	fmt.Println()
-	wantDownload := runConfirmMenu(fmt.Sprintf("发现新版本 v%s，是否立即前往下载页？", latest))
+	wantDownload, _ := runConfirmMenu(fmt.Sprintf("发现新版本 v%s，是否立即前往下载页？", latest), false)
 	if wantDownload {
 		openBrowser("https://cnb.cool/dmxapi/dmxapi_claude_code/-/releases")
 		os.Exit(0)
@@ -4074,10 +4283,10 @@ func main() {
 			fmt.Println("  curl -fsSL https://claude.ai/install.sh | bash")
 		}
 		fmt.Println()
-		choice := runItemMenu("检测未通过，如何处理", []MenuItem{
+		choice, _ := runItemMenu("检测未通过，如何处理", []MenuItem{
 			{"1", "我已安装，跳过检测", "忽略检测结果，继续使用配置工具"},
 			{"2", "确认退出", "退出程序"},
-		})
+		}, false)
 		if choice == 2 {
 			os.Exit(1)
 		}
@@ -4087,179 +4296,278 @@ func main() {
 	// 检查版本更新（失败则静默跳过）
 	checkForUpdates()
 
-	// 顶层配置方式选择（动态：含已保存的命名配置）
-	choice := selectTopModeDynamic()
-	switch choice.kind {
-	case topRecommended:
-		runRecommendedConfig()
-		fmt.Println()
-		styledInput("按回车键退出")
-		return
-	case topNamed:
-		manageNamedConfig(choice.named)
-		fmt.Println()
-		styledInput("按回车键退出")
-		return
-	case topClear:
-		runClearConfigMenu()
-		fmt.Println()
-		styledInput("按回车键退出")
-		return
+	// 顶层配置方式选择（动态：含已保存的命名配置）。
+	// 循环展示主菜单：新增流程在第一步（URL）回退时会回到此处重新选择。
+	for {
+		choice := selectTopModeDynamic()
+		switch choice.kind {
+		case topRecommended:
+			if back := runRecommendedConfig(); back {
+				fmt.Println()
+				continue
+			}
+			fmt.Println()
+			styledInput("按回车键退出")
+			return
+		case topNamed:
+			if back := manageNamedConfig(choice.named); back {
+				fmt.Println()
+				continue
+			}
+			fmt.Println()
+			styledInput("按回车键退出")
+			return
+		case topClear:
+			runClearConfigMenu()
+			fmt.Println()
+			styledInput("按回车键退出")
+			return
+		case topAdd:
+			// 新增配置流程；URL 第一步回退则回到主菜单重新选择
+			if back := runAddConfigFlow(); back {
+				fmt.Println()
+				continue
+			}
+			// 等待用户退出
+			fmt.Println()
+			styledInput("按回车键退出")
+			return
+		}
 	}
-
-	// kind == topAdd：进入新增配置流程
-	runAddConfigFlow()
-
-	// 等待用户退出
-	fmt.Println()
-	styledInput("按回车键退出")
 }
 
 // runAddConfigFlow 新增配置流程：先填配置名称，再直接走"从头配置"。
-func runAddConfigFlow() {
+// 返回 back=true 表示用户在 URL 第一步回退，应回到上层主菜单。
+func runAddConfigFlow() (back bool) {
 	fmt.Println()
-	name := promptConfigName()
-	runFromScratchConfig(name)
+	name, b := promptConfigName()
+	if b {
+		return true // 名称步骤 ESC 返回 → 上抛给 main 回主菜单
+	}
+	return runFromScratchConfig(name)
 }
 
 // configureURLTokenWithValidation 配置 Base URL / Token / 模型并循环验证 API 连接，
 // 直到验证通过或用户选择"强制配置"跳过验证。就地修改 *cfg。
-// 返回 forced 表示是否走了"强制跳过验证"分支（供调用方区分文案，可忽略）。
-func configureURLTokenWithValidation(cfg *Config) (forced bool) {
-	// 配置 Base URL
-	cfg.BaseURL = getNewBaseURL(cfg.BaseURL)
-
-	// 提取主机名用于提示
-	hostname := extractHost(cfg.BaseURL)
-
-	// 配置 Auth Token
-	cfg.AuthToken = getNewAuthToken(cfg.AuthToken, hostname)
-
-	// 配置模型（在 API 验证前，使验证所用模型与用户选择一致）
-	fmt.Println()
-	configureModels(cfg)
-
-	// 验证 API 连接（循环直到成功或强制跳过）
-	fmt.Println()
+// 以状态机实现逐步回退：每步可退回上一步并保留已填值；第一步（URL）回退则
+// 返回 back=true 上抛给调用方。forced 表示是否走了"强制跳过验证"分支（可忽略）。
+func configureURLTokenWithValidation(cfg *Config) (forced bool, back bool) {
+	const (
+		sURL = iota
+		sToken
+		sModel
+		sValidate
+	)
+	step := sURL
 	for {
-		if err := validateAPIConnection(cfg.BaseURL, cfg.AuthToken, cfg.Model); err != nil {
-			printError(fmt.Sprintf("API 连接验证失败: %v", err))
-
-			// 显示当前的URL和Key
-			fmt.Println()
-			printInfo("当前配置:")
-			fmt.Printf("  Base URL: %s\n", cfg.BaseURL)
-			fmt.Printf("  API Key:  %s\n", cfg.AuthToken)
-			fmt.Println()
-
-			// 让用户选择要修改什么
-			choice := selectFixOption()
-
-			switch choice {
-			case 1: // 修改URL
-				cfg.BaseURL = inputNewBaseURL()
-				hostname = extractHost(cfg.BaseURL)
-			case 2: // 修改Key
-				cfg.AuthToken = inputNewAuthToken(hostname)
-			case 3: // 都修改
-				cfg.BaseURL = inputNewBaseURL()
-				hostname = extractHost(cfg.BaseURL)
-				cfg.AuthToken = inputNewAuthToken(hostname)
-			case 4: // 修改模型名
-				cfg.Model = runL2Menu("默认模型", cfg.Model)
-			case 5: // 强制配置，跳过验证
-				printWarning("已跳过 API 验证，将直接保存当前配置")
-				fmt.Println()
-				return true
+		switch step {
+		case sURL:
+			url, b := getNewBaseURL(cfg.BaseURL, true)
+			if b {
+				return false, true // 第一步回退 → 上抛
 			}
+			cfg.BaseURL = url
+			step = sToken
+		case sToken:
+			hostname := extractHost(cfg.BaseURL)
+			tok, b := getNewAuthToken(cfg.AuthToken, hostname, true)
+			if b {
+				step = sURL // 回 URL（cfg.BaseURL 已保留）
+				continue
+			}
+			cfg.AuthToken = tok
+			step = sModel
+		case sModel:
+			// 配置模型（在 API 验证前，使验证所用模型与用户选择一致）
 			fmt.Println()
-			continue
+			if configureModels(cfg, true) {
+				step = sToken // L1 的 ESC=返回 → 回 Token
+				continue
+			}
+			step = sValidate
+		case sValidate:
+			// 验证 API 连接
+			fmt.Println()
+			if err := validateAPIConnection(cfg.BaseURL, cfg.AuthToken, cfg.Model); err != nil {
+				printError(fmt.Sprintf("API 连接验证失败: %v", err))
+
+				// 显示当前的URL和Key
+				fmt.Println()
+				printInfo("当前配置:")
+				fmt.Printf("  Base URL: %s\n", cfg.BaseURL)
+				fmt.Printf("  API Key:  %s\n", cfg.AuthToken)
+				fmt.Println()
+
+				// 让用户选择要修改什么
+				choice, b := selectFixOption(true)
+				if b {
+					step = sModel // 修复菜单返回 → 回模型步重看并重验
+					continue
+				}
+
+				switch choice {
+				case 1: // 修改URL
+					url, bb := inputNewBaseURL(true)
+					if bb {
+						fmt.Println()
+						continue // 取消修改 → 重新验证
+					}
+					cfg.BaseURL = url
+				case 2: // 修改Key
+					tok, bb := inputNewAuthToken(extractHost(cfg.BaseURL), true)
+					if bb {
+						fmt.Println()
+						continue
+					}
+					cfg.AuthToken = tok
+				case 3: // 都修改
+					url, bb := inputNewBaseURL(true)
+					if bb {
+						fmt.Println()
+						continue
+					}
+					cfg.BaseURL = url
+					tok, bb2 := inputNewAuthToken(extractHost(cfg.BaseURL), true)
+					if bb2 {
+						fmt.Println()
+						continue
+					}
+					cfg.AuthToken = tok
+				case 4: // 修改模型名（独立入口，b 返回表示放弃改模型）
+					m, bb := runL2Menu("默认模型", cfg.Model, true)
+					if !bb {
+						cfg.Model = m
+					}
+				case 5: // 强制配置，跳过验证
+					printWarning("已跳过 API 验证，将直接保存当前配置")
+					fmt.Println()
+					return true, false
+				}
+				fmt.Println()
+				continue
+			}
+			printSuccess("API 连接验证成功!")
+			return false, false
 		}
-		break
 	}
-	printSuccess("API 连接验证成功!")
-	return false
 }
 
 // runFromScratchConfig 从头配置流程：URL/Token/模型/验证 → 询问 Teams/VSCode →
 // 保存生效 → 以 name 持久化命名配置 → 打印摘要。
-func runFromScratchConfig(name string) {
-	// 加载现有配置作为默认值
+// 以状态机实现逐步回退；返回 back=true 表示在第一步（URL）回退，需上抛给调用方。
+func runFromScratchConfig(name string) (back bool) {
+	// 加载现有配置作为默认值（循环外声明，回退时保留已填值）
 	cfg := loadExistingConfig()
 
-	// 配置 URL / Token / 模型并验证
-	configureURLTokenWithValidation(&cfg)
+	const (
+		sURLTok = iota
+		sTeams
+		sVSCode
+		sSave
+	)
+	step := sURLTok
+	wantTeams, wantVSCode := false, false
 
-	// 询问附加配置意向
-	fmt.Println()
-	wantTeams := styledConfirm("是否同时配置 Agent Teams 功能")
-	fmt.Println()
-	wantVSCode := styledConfirm("是否同时配置 VSCode 插件")
+	for {
+		switch step {
+		case sURLTok:
+			// 配置 URL / Token / 模型并验证
+			if _, b := configureURLTokenWithValidation(&cfg); b {
+				return true // URL 第一步回退 → 上抛
+			}
+			step = sTeams
+		case sTeams:
+			// 询问附加配置意向
+			fmt.Println()
+			v, b := styledConfirm("是否同时配置 Agent Teams 功能", true)
+			if b {
+				step = sURLTok
+				continue
+			}
+			wantTeams = v
+			step = sVSCode
+		case sVSCode:
+			fmt.Println()
+			v, b := styledConfirm("是否同时配置 VSCode 插件", true)
+			if b {
+				step = sTeams
+				continue
+			}
+			wantVSCode = v
+			step = sSave
+		case sSave:
+			// 保存配置（带动画）
+			fmt.Println()
+			err := runWithSpinner("正在保存配置...", func() error {
+				return saveConfig(cfg)
+			})
+			if err != nil {
+				printError(fmt.Sprintf("保存配置失败: %v", err))
+				os.Exit(1)
+			}
+			printSuccess("保存成功!")
 
-	// 保存配置（带动画）
-	fmt.Println()
-	err := runWithSpinner("正在保存配置...", func() error {
-		return saveConfig(cfg)
-	})
-	if err != nil {
-		printError(fmt.Sprintf("保存配置失败: %v", err))
-		os.Exit(1)
-	}
-	printSuccess("保存成功!")
+			// 执行附加配置
+			if wantTeams {
+				fmt.Println()
+				configureAgentTeams(false)
+			}
+			if wantVSCode {
+				fmt.Println()
+				configureVSCode(cfg, false)
+			}
 
-	// 执行附加配置
-	if wantTeams {
-		fmt.Println()
-		configureAgentTeams(false)
-	}
-	if wantVSCode {
-		fmt.Println()
-		configureVSCode(cfg, false)
-	}
+			// 持久化命名配置快照（生效已由 saveConfig 完成；此处失败仅告警，不影响生效）
+			nc := NamedConfig{
+				Config:      cfg,
+				Name:        name,
+				AgentTeams:  getManagedAgentTeamsValue(),
+				EffortLevel: getManagedEffortLevelValue(),
+				SavedAt:     time.Now().Format(time.RFC3339),
+				AppVersion:  appVersion,
+			}
+			if path, err := saveNamedConfig(nc); err != nil {
+				printWarning(fmt.Sprintf("命名配置持久化失败: %v", err))
+			} else {
+				printSuccess(fmt.Sprintf("已保存命名配置: %s", path))
+			}
 
-	// 持久化命名配置快照（生效已由 saveConfig 完成；此处失败仅告警，不影响生效）
-	nc := NamedConfig{
-		Config:      cfg,
-		Name:        name,
-		AgentTeams:  getManagedAgentTeamsValue(),
-		EffortLevel: getManagedEffortLevelValue(),
-		SavedAt:     time.Now().Format(time.RFC3339),
-		AppVersion:  appVersion,
+			// 打印摘要
+			printSummary(cfg)
+			return false
+		}
 	}
-	if path, err := saveNamedConfig(nc); err != nil {
-		printWarning(fmt.Sprintf("命名配置持久化失败: %v", err))
-	} else {
-		printSuccess(fmt.Sprintf("已保存命名配置: %s", path))
-	}
-
-	// 打印摘要
-	printSummary(cfg)
 }
 
 // promptConfigName 循环读取配置名称，已存在同名文件时确认是否覆盖。
-func promptConfigName() string {
+// 按 ESC 返回上一步（back=true，此时 name 无意义返回空串）。
+func promptConfigName() (name string, back bool) {
 	for {
-		name := strings.TrimSpace(styledInput("配置名称"))
-		if name == "" {
+		input, esc := styledInputWithEsc("配置名称")
+		if esc {
+			return "", true
+		}
+		if input == "" {
 			printError("名称不能为空")
 			continue
 		}
 		dir, err := dmxapiConfigDir()
 		if err == nil {
-			path := filepath.Join(dir, namedConfigFileName(name))
+			path := filepath.Join(dir, namedConfigFileName(input))
 			if _, statErr := os.Stat(path); statErr == nil {
-				if !styledConfirm(fmt.Sprintf("已存在同名配置「%s」，是否覆盖", name)) {
+				if ok, _ := styledConfirm(fmt.Sprintf("已存在同名配置「%s」，是否覆盖", input), false); !ok {
 					fmt.Println()
 					continue
 				}
 			}
 		}
-		return name
+		return input, false
 	}
 }
 
 // manageNamedConfig 命名配置管理界面：应用、编辑或删除。
-func manageNamedConfig(nc NamedConfig) {
+// 返回 back=true 表示用户在管理菜单按 ESC 返回主菜单。
+func manageNamedConfig(nc NamedConfig) (back bool) {
 	printSectionHeader(fmt.Sprintf("配置: %s", nc.Name))
 	fmt.Println()
 	printInfo(fmt.Sprintf("Base URL:     %s", nc.BaseURL))
@@ -4273,11 +4581,14 @@ func manageNamedConfig(nc NamedConfig) {
 	}
 	fmt.Println()
 
-	choice := runItemMenu(fmt.Sprintf("管理配置「%s」", nc.Name), []MenuItem{
+	choice, back := runItemMenu(fmt.Sprintf("管理配置「%s」", nc.Name), []MenuItem{
 		{"1", "应用此配置", "写入 settings.json 与系统环境变量"},
 		{"2", "编辑此配置", "修改 URL/Token/模型/开关等"},
 		{"3", "删除此配置", "从 ~/.DMXAPI/claude_code 移除"},
-	})
+	}, true)
+	if back {
+		return true // 返回主菜单
+	}
 	switch choice {
 	case 1:
 		fmt.Println()
@@ -4285,7 +4596,7 @@ func manageNamedConfig(nc NamedConfig) {
 			return applyNamedConfig(nc)
 		}); err != nil {
 			printError(fmt.Sprintf("应用配置失败: %v", err))
-			return
+			return false
 		}
 		printSuccess("应用成功!")
 		printSummary(nc.Config)
@@ -4294,16 +4605,17 @@ func manageNamedConfig(nc NamedConfig) {
 		editNamedConfig(nc)
 	case 3:
 		fmt.Println()
-		if !styledConfirm(fmt.Sprintf("确定删除配置「%s」", nc.Name)) {
+		if ok, _ := styledConfirm(fmt.Sprintf("确定删除配置「%s」", nc.Name), false); !ok {
 			printInfo("已取消，未做任何更改")
-			return
+			return false
 		}
 		if err := deleteNamedConfig(nc.FilePath); err != nil {
 			printError(fmt.Sprintf("删除失败: %v", err))
-			return
+			return false
 		}
 		printSuccess(fmt.Sprintf("已删除配置「%s」", nc.Name))
 	}
+	return false
 }
 
 // editNamedConfig 编辑已保存的命名配置：选择一项细分配置修改后，
@@ -4324,20 +4636,23 @@ func editNamedConfig(nc NamedConfig) {
 	// 基于快照的值拷贝，可安全就地修改
 	cfg := nc.Config
 
-	choice := runItemMenu(fmt.Sprintf("编辑配置「%s」", nc.Name), []MenuItem{
+	choice, back := runItemMenu(fmt.Sprintf("编辑配置「%s」", nc.Name), []MenuItem{
 		{"1", "修改 URL/Token", "重新配置 URL、Token 和模型"},
 		{"2", "仅配置模型", "只修改默认/各档位模型"},
 		{"3", "解决 400 报错", "禁用实验性请求头"},
 		{"4", "配置 Effort Level", "设置 ultracode 最高思考等级"},
 		{"5", "配置实验性功能", "启用/禁用 Agent Teams"},
 		{"6", "配置 VSCode 插件", "写入 VSCode settings.json"},
-	})
+	}, true)
+	if back {
+		return // 编辑菜单 ESC → 不保存，返回上一界面
+	}
 	fmt.Println()
 	switch choice {
 	case 1:
 		configureURLTokenWithValidation(&cfg)
 	case 2:
-		configureModels(&cfg)
+		configureModels(&cfg, false)
 	case 3:
 		printSectionHeader("修复 Claude Code 400 请求头错误")
 		printInfo("禁用实验性请求头，解决 Claude Code 400 传入请求头错误问题")
@@ -4415,10 +4730,10 @@ func applyNamedConfig(nc NamedConfig) error {
 
 // runClearConfigMenu 清除配置二级菜单：清除所有 / 清除单个命名配置。
 func runClearConfigMenu() {
-	choice := runItemMenu("清除配置", []MenuItem{
+	choice, _ := runItemMenu("清除配置", []MenuItem{
 		{"1", "清除所有配置", "删除全部命名配置 + 清除 Claude Code 配置"},
 		{"2", "清除用户新增配置", "选择并删除某个已保存的命名配置"},
-	})
+	}, false)
 	switch choice {
 	case 1:
 		if !clearAllConfig() {
@@ -4450,10 +4765,13 @@ func runDeleteNamedConfigMenu() {
 	for i, c := range configs {
 		items[i] = MenuItem{strconv.Itoa(i + 1), fmt.Sprintf("删除 %s 配置", c.Name), maskToken(c.AuthToken)}
 	}
-	idx := runItemMenu("选择要删除的配置", items)
+	idx, back := runItemMenu("选择要删除的配置", items, true)
+	if back {
+		return // 返回上一界面，不删除任何配置
+	}
 	target := configs[idx-1]
 	fmt.Println()
-	if !styledConfirm(fmt.Sprintf("确定删除配置「%s」", target.Name)) {
+	if ok, _ := styledConfirm(fmt.Sprintf("确定删除配置「%s」", target.Name), false); !ok {
 		printInfo("已取消，未做任何更改")
 		return
 	}
