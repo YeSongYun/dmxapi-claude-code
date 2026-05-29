@@ -1268,3 +1268,201 @@ func TestBroadcastEnvironmentChangeStub(t *testing.T) {
 	// 非 Windows 下为 no-op；Windows 下函数存在也可调用（不做实际广播验证）
 	broadcastEnvironmentChange()
 }
+
+func TestDmxapiConfigDirFor(t *testing.T) {
+	got := dmxapiConfigDirFor("/Users/alice")
+	want := filepath.Join("/Users/alice", ".DMXAPI", "claude_code")
+	if got != want {
+		t.Errorf("dmxapiConfigDirFor() = %q, want %q", got, want)
+	}
+}
+
+func TestSanitizeConfigFileName(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"work", "work"},
+		{"  spaced  ", "spaced"},
+		{"", "config"},
+		{"   ", "config"},
+		{"../etc/passwd", "_etc_passwd"},
+		{"a/b\\c:d*e?f\"g<h>i|j", "a_b_c_d_e_f_g_h_i_j"},
+		{"trail.", "trail"},
+		{".lead", "lead"},
+		{"con", "_con"},
+		{"NUL", "_NUL"},
+		{"Com1", "_Com1"},
+		{"我的配置", "我的配置"},
+	}
+	for _, c := range cases {
+		if got := sanitizeConfigFileName(c.in); got != c.want {
+			t.Errorf("sanitizeConfigFileName(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+	// 超长按 rune 截断到 80
+	long := strings.Repeat("配", 200)
+	if got := sanitizeConfigFileName(long); len([]rune(got)) != 80 {
+		t.Errorf("sanitizeConfigFileName(long) rune len = %d, want 80", len([]rune(got)))
+	}
+}
+
+func TestNamedConfigFileName(t *testing.T) {
+	if got := namedConfigFileName("work"); got != "work.json" {
+		t.Errorf("namedConfigFileName() = %q, want %q", got, "work.json")
+	}
+	if got := namedConfigFileName("../x"); got != "_x.json" {
+		t.Errorf("namedConfigFileName(../x) = %q, want %q", got, "_x.json")
+	}
+}
+
+func TestMapTopMenuIndex(t *testing.T) {
+	cases := []struct {
+		idx, n int
+		want   topMenuKind
+	}{
+		// n = 0：1=推荐，2=新增，3=清除
+		{1, 0, topRecommended},
+		{2, 0, topAdd},
+		{3, 0, topClear},
+		// n = 2：1=推荐，2/3=命名，4=新增，5=清除
+		{1, 2, topRecommended},
+		{2, 2, topNamed},
+		{3, 2, topNamed},
+		{4, 2, topAdd},
+		{5, 2, topClear},
+	}
+	for _, c := range cases {
+		if got := mapTopMenuIndex(c.idx, c.n); got != c.want {
+			t.Errorf("mapTopMenuIndex(idx=%d, n=%d) = %d, want %d", c.idx, c.n, got, c.want)
+		}
+	}
+}
+
+func TestNamedConfigRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	nc := NamedConfig{
+		Config: Config{
+			BaseURL:     "https://www.dmxapi.cn",
+			AuthToken:   "sk-test-123",
+			Model:       "claude-opus-4-8-cc",
+			HaikuModel:  "claude-haiku-4-5-20251001-cc",
+			SonnetModel: "claude-sonnet-4-6-cc",
+			OpusModel:   "claude-opus-4-8-cc",
+		},
+		Name:        "我的配置",
+		AgentTeams:  "1",
+		EffortLevel: "ultracode",
+		SavedAt:     "2026-05-29T10:00:00Z",
+		AppVersion:  "1.6.5",
+	}
+	path, err := saveNamedConfigIn(dir, nc)
+	if err != nil {
+		t.Fatalf("saveNamedConfigIn() error = %v", err)
+	}
+	if filepath.Base(path) != "我的配置.json" {
+		t.Errorf("file base = %q, want %q", filepath.Base(path), "我的配置.json")
+	}
+	// 权限应为 0600
+	if info, err := os.Stat(path); err == nil {
+		if runtime.GOOS != "windows" && info.Mode().Perm() != 0600 {
+			t.Errorf("file perm = %v, want 0600", info.Mode().Perm())
+		}
+	}
+	// FilePath 不应出现在序列化结果中
+	raw, _ := os.ReadFile(path)
+	if strings.Contains(string(raw), "FilePath") || strings.Contains(string(raw), "\"-\"") {
+		t.Errorf("serialized JSON should not contain FilePath field: %s", raw)
+	}
+
+	got, err := readNamedConfig(path)
+	if err != nil {
+		t.Fatalf("readNamedConfig() error = %v", err)
+	}
+	if got.FilePath != path {
+		t.Errorf("FilePath = %q, want %q", got.FilePath, path)
+	}
+	got.FilePath = ""
+	nc.FilePath = ""
+	if got != nc {
+		t.Errorf("round trip mismatch:\n got = %+v\nwant = %+v", got, nc)
+	}
+}
+
+func TestListNamedConfigsIn(t *testing.T) {
+	// 目录不存在 → 空切片，无错误
+	missing := filepath.Join(t.TempDir(), "nope")
+	if got, err := listNamedConfigsIn(missing); err != nil || got != nil {
+		t.Errorf("listNamedConfigsIn(missing) = %v, %v; want nil, nil", got, err)
+	}
+
+	dir := t.TempDir()
+	mustSave := func(name string) {
+		if _, err := saveNamedConfigIn(dir, NamedConfig{Name: name, Config: Config{Model: "m-" + name}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustSave("zebra")
+	mustSave("alpha")
+	mustSave("mango")
+	// 混入非 .json 与坏 json，应被跳过
+	if err := os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("x"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "broken.json"), []byte("{not json"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := listNamedConfigsIn(dir)
+	if err != nil {
+		t.Fatalf("listNamedConfigsIn() error = %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("got %d configs, want 3", len(got))
+	}
+	// 按 Name 升序
+	wantOrder := []string{"alpha", "mango", "zebra"}
+	for i, w := range wantOrder {
+		if got[i].Name != w {
+			t.Errorf("config[%d].Name = %q, want %q", i, got[i].Name, w)
+		}
+		if got[i].FilePath == "" {
+			t.Errorf("config[%d].FilePath not populated", i)
+		}
+	}
+}
+
+func TestDeleteAllNamedConfigsIn(t *testing.T) {
+	// 目录不存在 → 0，无错误
+	missing := filepath.Join(t.TempDir(), "nope")
+	if n, err := deleteAllNamedConfigsIn(missing); err != nil || n != 0 {
+		t.Errorf("deleteAllNamedConfigsIn(missing) = %d, %v; want 0, nil", n, err)
+	}
+
+	dir := t.TempDir()
+	if _, err := saveNamedConfigIn(dir, NamedConfig{Name: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := saveNamedConfigIn(dir, NamedConfig{Name: "b"}); err != nil {
+		t.Fatal(err)
+	}
+	// 非 .json 文件应保留
+	keep := filepath.Join(dir, "keep.txt")
+	if err := os.WriteFile(keep, []byte("x"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := deleteAllNamedConfigsIn(dir)
+	if err != nil {
+		t.Fatalf("deleteAllNamedConfigsIn() error = %v", err)
+	}
+	if n != 2 {
+		t.Errorf("deleted %d, want 2", n)
+	}
+	if _, err := os.Stat(keep); err != nil {
+		t.Errorf("non-json file should be kept, stat err = %v", err)
+	}
+	remaining, _ := listNamedConfigsIn(dir)
+	if len(remaining) != 0 {
+		t.Errorf("remaining configs = %d, want 0", len(remaining))
+	}
+}

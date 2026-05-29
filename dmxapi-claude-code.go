@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -247,12 +248,24 @@ var rawModeState *term.State
 
 // Config 存储所有配置项
 type Config struct {
-	BaseURL     string
-	AuthToken   string
-	Model       string
-	HaikuModel  string
-	SonnetModel string
-	OpusModel   string
+	BaseURL     string `json:"baseUrl"`
+	AuthToken   string `json:"authToken"`
+	Model       string `json:"model"`
+	HaikuModel  string `json:"haikuModel"`
+	SonnetModel string `json:"sonnetModel"`
+	OpusModel   string `json:"opusModel"`
+}
+
+// NamedConfig 命名配置的完整快照，持久化到 ~/.DMXAPI/claude_code/<name>.json。
+// 内嵌 Config 使字段提升，且 nc.Config 可直接传给 saveConfig / applyNamedConfig。
+type NamedConfig struct {
+	Config
+	Name        string `json:"name"`
+	AgentTeams  string `json:"agentTeams,omitempty"`  // 快照时的开关值（"1" 或 ""）
+	EffortLevel string `json:"effortLevel,omitempty"` // 如 "ultracode" 或 ""
+	SavedAt     string `json:"savedAt,omitempty"`     // RFC3339
+	AppVersion  string `json:"appVersion,omitempty"`  // 写入时的 appVersion
+	FilePath    string `json:"-"`                     // 运行期填充，不序列化
 }
 
 // clearResult 记录单个位置的清除结果
@@ -1452,6 +1465,191 @@ func getClaudeSettingsPath() (string, error) {
 	return claudeSettingsPathFor(homeDir), nil
 }
 
+// dmxapiConfigDirFor 返回命名配置持久化目录 ~/.DMXAPI/claude_code（纯函数，便于测试）。
+func dmxapiConfigDirFor(homeDir string) string {
+	return filepath.Join(homeDir, ".DMXAPI", "claude_code")
+}
+
+// dmxapiConfigDir 返回当前用户的命名配置持久化目录。
+func dmxapiConfigDir() (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("无法确定命名配置目录路径: %v", err)
+	}
+	return dmxapiConfigDirFor(homeDir), nil
+}
+
+// windowsReservedNames 是 Windows 下不允许作为文件名的保留设备名（不区分大小写）。
+var windowsReservedNames = map[string]bool{
+	"con": true, "prn": true, "aux": true, "nul": true,
+	"com1": true, "com2": true, "com3": true, "com4": true, "com5": true,
+	"com6": true, "com7": true, "com8": true, "com9": true,
+	"lpt1": true, "lpt2": true, "lpt3": true, "lpt4": true, "lpt5": true,
+	"lpt6": true, "lpt7": true, "lpt8": true, "lpt9": true,
+}
+
+// sanitizeConfigFileName 将用户输入的配置名转为安全的文件名主干（纯函数）。
+// 防路径穿越、过滤跨平台非法字符、保留 CJK、规避 Windows 保留名、限制长度。
+func sanitizeConfigFileName(name string) string {
+	name = strings.TrimSpace(name)
+	// 折叠路径穿越片段
+	name = strings.ReplaceAll(name, "..", "")
+	// 过滤控制字符与跨平台非法字符
+	var b strings.Builder
+	for _, r := range name {
+		switch {
+		case r < 0x20:
+			b.WriteRune('_')
+		case strings.ContainsRune(`/\:*?"<>|`, r):
+			b.WriteRune('_')
+		default:
+			b.WriteRune(r)
+		}
+	}
+	cleaned := b.String()
+	// 去掉首尾的点和空格（Windows 不允许结尾点/空格）
+	cleaned = strings.Trim(cleaned, " .")
+	if cleaned == "" {
+		return "config"
+	}
+	// 规避 Windows 保留设备名
+	if windowsReservedNames[strings.ToLower(cleaned)] {
+		cleaned = "_" + cleaned
+	}
+	// 按 rune 截断到 80，规避文件名长度上限
+	runes := []rune(cleaned)
+	if len(runes) > 80 {
+		cleaned = string(runes[:80])
+	}
+	return cleaned
+}
+
+// namedConfigFileName 返回命名配置对应的文件名（含扩展名，纯函数）。
+func namedConfigFileName(name string) string {
+	return sanitizeConfigFileName(name) + ".json"
+}
+
+// listNamedConfigsIn 列出指定目录下的所有命名配置，按 Name 升序。
+// 目录不存在返回空切片；非 .json 文件与解析失败的文件跳过。
+func listNamedConfigsIn(dir string) ([]NamedConfig, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var configs []NamedConfig
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(strings.ToLower(e.Name()), ".json") {
+			continue
+		}
+		path := filepath.Join(dir, e.Name())
+		nc, err := readNamedConfig(path)
+		if err != nil {
+			continue // 跳过坏文件，保证健壮
+		}
+		configs = append(configs, nc)
+	}
+	sort.Slice(configs, func(i, j int) bool {
+		return configs[i].Name < configs[j].Name
+	})
+	return configs, nil
+}
+
+// saveNamedConfigIn 将命名配置写入指定目录，返回写入的文件路径。
+func saveNamedConfigIn(dir string, nc NamedConfig) (string, error) {
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return "", err
+	}
+	data, err := json.MarshalIndent(nc, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, namedConfigFileName(nc.Name))
+	if err := writeFileAtomic(path, data, 0600); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+// deleteAllNamedConfigsIn 删除指定目录下所有 .json 命名配置，返回删除数量。
+func deleteAllNamedConfigsIn(dir string) (int, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	count := 0
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(strings.ToLower(e.Name()), ".json") {
+			continue
+		}
+		if err := os.Remove(filepath.Join(dir, e.Name())); err != nil {
+			return count, err
+		}
+		count++
+	}
+	return count, nil
+}
+
+// readNamedConfig 从文件读取单个命名配置，并填充运行期 FilePath 字段。
+func readNamedConfig(path string) (NamedConfig, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return NamedConfig{}, err
+	}
+	var nc NamedConfig
+	if err := json.Unmarshal(data, &nc); err != nil {
+		return NamedConfig{}, err
+	}
+	nc.FilePath = path
+	return nc, nil
+}
+
+// deleteNamedConfig 删除指定路径的命名配置文件。
+func deleteNamedConfig(path string) error {
+	return os.Remove(path)
+}
+
+// listNamedConfigs 列出当前用户保存的所有命名配置（目录不存在返回空切片）。
+func listNamedConfigs() ([]NamedConfig, error) {
+	dir, err := dmxapiConfigDir()
+	if err != nil {
+		return nil, err
+	}
+	return listNamedConfigsIn(dir)
+}
+
+// saveNamedConfig 将命名配置保存到当前用户的持久化目录，返回写入路径。
+func saveNamedConfig(nc NamedConfig) (string, error) {
+	dir, err := dmxapiConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return saveNamedConfigIn(dir, nc)
+}
+
+// deleteAllNamedConfigs 删除当前用户的所有命名配置，返回删除数量。
+func deleteAllNamedConfigs() (int, error) {
+	dir, err := dmxapiConfigDir()
+	if err != nil {
+		return 0, err
+	}
+	return deleteAllNamedConfigsIn(dir)
+}
+
+// removeManagedEnvVar 同时从当前进程与系统持久层移除指定环境变量。
+func removeManagedEnvVar(key string) error {
+	os.Unsetenv(key)
+	if runtime.GOOS == "windows" {
+		return removeEnvVarWindows(key)
+	}
+	return removeEnvVarUnix(key)
+}
+
 // mergeClaudeSettings 将本工具管理的环境变量写入 Claude Code settings.json 的 env 键，保留其他设置和其他 env 键。
 func mergeClaudeSettings(existingJSON []byte, managedEnv map[string]string) ([]byte, error) {
 	cleaned := stripJSONC(existingJSON)
@@ -2523,20 +2721,76 @@ func getNewAuthToken(existing, hostname string) string {
 	}
 }
 
-// selectTopMode 选择顶层模式
-// 返回值: 1 = dmxapi 推荐配置, 2 = 自定义配置, 3 = 清除所有配置
-func selectTopMode() int {
-	return runItemMenu("请选择配置方式", []MenuItem{
-		{"1", "dmxapi 推荐配置", "Claude Opus 4.8 一键配置"},
-		{"2", "自定义配置", "手动配置 URL / Token / 模型等"},
-		{"3", "清除所有配置", "移除所有已保存的配置"},
-	})
+// topMenuKind 表示动态主菜单选中项的语义类别。
+type topMenuKind int
+
+const (
+	topRecommended topMenuKind = iota // dmxapi 推荐配置
+	topNamed                          // 某个已保存的命名配置
+	topAdd                            // 新增配置
+	topClear                          // 清除配置
+)
+
+// topMenuChoice 是动态主菜单的分发结果。
+type topMenuChoice struct {
+	kind  topMenuKind
+	named NamedConfig // 仅当 kind == topNamed 时有效
+}
+
+// mapTopMenuIndex 将 1-based 菜单索引映射为语义类别（纯函数，便于测试）。
+// 布局：1=推荐；2..1+n=命名配置；2+n=新增；3+n=清除。
+func mapTopMenuIndex(idx, namedCount int) topMenuKind {
+	switch {
+	case idx == 1:
+		return topRecommended
+	case idx >= 2 && idx <= 1+namedCount:
+		return topNamed
+	case idx == 2+namedCount:
+		return topAdd
+	default:
+		return topClear
+	}
+}
+
+// selectTopModeDynamic 渲染动态主菜单（含已保存的命名配置），返回分发结果。
+func selectTopModeDynamic() topMenuChoice {
+	configs, _ := listNamedConfigs() // 出错按空处理，不阻断主流程
+	n := len(configs)
+
+	items := []MenuItem{{"1", "dmxapi 推荐配置", "Claude Opus 4.8 一键配置"}}
+	for i, c := range configs {
+		items = append(items, MenuItem{strconv.Itoa(i + 2), c.Name, namedConfigDesc(c)})
+	}
+	items = append(items,
+		MenuItem{strconv.Itoa(n + 2), "新增配置", "手动配置 URL / Token / 模型等"},
+		MenuItem{strconv.Itoa(n + 3), "清除配置", "清除全部或单个已保存配置"},
+	)
+
+	idx := runItemMenu("请选择配置方式", items)
+	kind := mapTopMenuIndex(idx, n)
+	choice := topMenuChoice{kind: kind}
+	if kind == topNamed {
+		choice.named = configs[idx-2]
+	}
+	return choice
+}
+
+// namedConfigDesc 为命名配置生成菜单项副描述。
+func namedConfigDesc(c NamedConfig) string {
+	host := extractHost(c.BaseURL)
+	if c.Model != "" && host != "" {
+		return fmt.Sprintf("%s · %s", c.Model, host)
+	}
+	if c.Model != "" {
+		return c.Model
+	}
+	return host
 }
 
 // selectConfigMode 选择自定义配置的子模式
 // 返回值: 1 = 从头配置, 2 = 仅配置模型, 3 = 解决 400 报错, 4 = 配置 Effort Level, 5 = 配置实验性功能, 6 = 配置 VSCode 插件
 func selectConfigMode() int {
-	return runItemMenu("自定义配置", []MenuItem{
+	return runItemMenu("新增配置", []MenuItem{
 		{"1", "从头配置", "配置 URL、Token 和模型"},
 		{"2", "仅配置模型", "跳过 URL 和 Token 配置"},
 		{"3", "解决 400 报错", "禁用实验性请求头"},
@@ -3822,21 +4076,37 @@ func main() {
 	// 检查版本更新（失败则静默跳过）
 	checkForUpdates()
 
-	// 顶层配置方式选择
-	switch selectTopMode() {
-	case 1:
+	// 顶层配置方式选择（动态：含已保存的命名配置）
+	choice := selectTopModeDynamic()
+	switch choice.kind {
+	case topRecommended:
 		runRecommendedConfig()
 		fmt.Println()
 		styledInput("按回车键退出")
 		return
-	case 3:
-		clearAllConfig()
+	case topNamed:
+		manageNamedConfig(choice.named)
+		fmt.Println()
+		styledInput("按回车键退出")
+		return
+	case topClear:
+		runClearConfigMenu()
 		fmt.Println()
 		styledInput("按回车键退出")
 		return
 	}
 
-	// 顶层选择 = 2（自定义配置），进入原有子菜单
+	// kind == topAdd：进入新增配置流程
+	runAddConfigFlow()
+
+	// 等待用户退出
+	fmt.Println()
+	styledInput("按回车键退出")
+}
+
+// runAddConfigFlow 新增配置流程：原"自定义配置"子菜单逻辑。
+// 模式 1/2/3 产出完整配置快照并命名持久化；模式 4/5/6 为开关型子工具，早退、不命名。
+func runAddConfigFlow() {
 	configMode := selectConfigMode()
 
 	// 加载现有配置
@@ -3938,6 +4208,10 @@ func main() {
 		configureModels(&cfg)
 	}
 
+	// 保存前填写配置名称（用于持久化为命名配置）
+	fmt.Println()
+	name := promptConfigName()
+
 	// 保存配置（带动画）
 	fmt.Println()
 	err := runWithSpinner("正在保存配置...", func() error {
@@ -3959,10 +4233,168 @@ func main() {
 		configureVSCode(cfg, false)
 	}
 
+	// 持久化命名配置快照（生效已由 saveConfig 完成；此处失败仅告警，不影响生效）
+	nc := NamedConfig{
+		Config:      cfg,
+		Name:        name,
+		AgentTeams:  getManagedAgentTeamsValue(),
+		EffortLevel: getManagedEffortLevelValue(),
+		SavedAt:     time.Now().Format(time.RFC3339),
+		AppVersion:  appVersion,
+	}
+	if path, err := saveNamedConfig(nc); err != nil {
+		printWarning(fmt.Sprintf("命名配置持久化失败: %v", err))
+	} else {
+		printSuccess(fmt.Sprintf("已保存命名配置: %s", path))
+	}
+
 	// 打印摘要
 	printSummary(cfg)
+}
 
-	// 等待用户退出
+// promptConfigName 循环读取配置名称，已存在同名文件时确认是否覆盖。
+func promptConfigName() string {
+	for {
+		name := strings.TrimSpace(styledInput("配置名称"))
+		if name == "" {
+			printError("名称不能为空")
+			continue
+		}
+		dir, err := dmxapiConfigDir()
+		if err == nil {
+			path := filepath.Join(dir, namedConfigFileName(name))
+			if _, statErr := os.Stat(path); statErr == nil {
+				if !styledConfirm(fmt.Sprintf("已存在同名配置「%s」，是否覆盖", name)) {
+					fmt.Println()
+					continue
+				}
+			}
+		}
+		return name
+	}
+}
+
+// manageNamedConfig 命名配置管理界面：应用或删除。
+func manageNamedConfig(nc NamedConfig) {
+	printSectionHeader(fmt.Sprintf("配置: %s", nc.Name))
 	fmt.Println()
-	styledInput("按回车键退出")
+	printInfo(fmt.Sprintf("Base URL:     %s", nc.BaseURL))
+	printInfo(fmt.Sprintf("Token:        %s", maskToken(nc.AuthToken)))
+	printInfo(fmt.Sprintf("默认模型:     %s", nc.Model))
+	if nc.EffortLevel != "" {
+		printInfo(fmt.Sprintf("Effort Level: %s", nc.EffortLevel))
+	}
+	if nc.AgentTeams != "" {
+		printInfo("Agent Teams:  已启用")
+	}
+	fmt.Println()
+
+	choice := runItemMenu(fmt.Sprintf("管理配置「%s」", nc.Name), []MenuItem{
+		{"1", "应用此配置", "写入 settings.json 与系统环境变量"},
+		{"2", "删除此配置", "从 ~/.DMXAPI/claude_code 移除"},
+	})
+	switch choice {
+	case 1:
+		fmt.Println()
+		if err := runWithSpinner("正在应用配置...", func() error {
+			return applyNamedConfig(nc)
+		}); err != nil {
+			printError(fmt.Sprintf("应用配置失败: %v", err))
+			return
+		}
+		printSuccess("应用成功!")
+		printSummary(nc.Config)
+	case 2:
+		fmt.Println()
+		if !styledConfirm(fmt.Sprintf("确定删除配置「%s」", nc.Name)) {
+			printInfo("已取消，未做任何更改")
+			return
+		}
+		if err := deleteNamedConfig(nc.FilePath); err != nil {
+			printError(fmt.Sprintf("删除失败: %v", err))
+			return
+		}
+		printSuccess(fmt.Sprintf("已删除配置「%s」", nc.Name))
+	}
+}
+
+// applyNamedConfig 忠实还原命名配置快照到 Claude settings 与系统环境变量。
+// 处理 buildManagedEnvMap"只增不删"约束：快照未启用的开关需显式从持久层移除。
+func applyNamedConfig(nc NamedConfig) error {
+	// 1) 先把开关注入当前进程 env，供 saveConfig→buildManagedEnvMap 读取
+	if nc.EffortLevel != "" {
+		os.Setenv(envEffortLevel, nc.EffortLevel)
+	} else {
+		os.Unsetenv(envEffortLevel)
+	}
+	if nc.AgentTeams != "" {
+		os.Setenv(envAgentTeams, nc.AgentTeams)
+	} else {
+		os.Unsetenv(envAgentTeams)
+	}
+
+	// 2) 复用 saveConfig 写入 base/token/models +（因 env 已设）effort/agentteams
+	if err := saveConfig(nc.Config); err != nil {
+		return err
+	}
+
+	// 3) 关闭语义：快照未启用但系统/settings 可能残留旧值，显式移除
+	if nc.EffortLevel == "" {
+		_ = removeManagedEnvVar(envEffortLevel)
+		_ = clearEffortFromClaudeSettings()
+	}
+	if nc.AgentTeams == "" {
+		_ = removeManagedEnvVar(envAgentTeams)
+		_ = saveClaudeSettingsConfigWithAgentTeams(nc.Config, "")
+	}
+	return nil
+}
+
+// runClearConfigMenu 清除配置二级菜单：清除所有 / 清除单个命名配置。
+func runClearConfigMenu() {
+	choice := runItemMenu("清除配置", []MenuItem{
+		{"1", "清除所有配置", "删除全部命名配置 + 清除 Claude Code 配置"},
+		{"2", "清除用户新增配置", "选择并删除某个已保存的命名配置"},
+	})
+	switch choice {
+	case 1:
+		clearAllConfig()
+		if n, err := deleteAllNamedConfigs(); err != nil {
+			printWarning(fmt.Sprintf("删除命名配置文件失败: %v", err))
+		} else if n > 0 {
+			fmt.Println()
+			printSuccess(fmt.Sprintf("已删除 %d 个命名配置文件", n))
+		}
+	case 2:
+		runDeleteNamedConfigMenu()
+	}
+}
+
+// runDeleteNamedConfigMenu 平铺所有命名配置，让用户选择删除其中一个。
+func runDeleteNamedConfigMenu() {
+	configs, err := listNamedConfigs()
+	if err != nil {
+		printError(fmt.Sprintf("读取命名配置失败: %v", err))
+		return
+	}
+	if len(configs) == 0 {
+		printInfo("暂无已保存的命名配置")
+		return
+	}
+	items := make([]MenuItem, len(configs))
+	for i, c := range configs {
+		items[i] = MenuItem{strconv.Itoa(i + 1), fmt.Sprintf("删除 %s 配置", c.Name), maskToken(c.AuthToken)}
+	}
+	idx := runItemMenu("选择要删除的配置", items)
+	target := configs[idx-1]
+	fmt.Println()
+	if !styledConfirm(fmt.Sprintf("确定删除配置「%s」", target.Name)) {
+		printInfo("已取消，未做任何更改")
+		return
+	}
+	if err := deleteNamedConfig(target.FilePath); err != nil {
+		printError(fmt.Sprintf("删除失败: %v", err))
+		return
+	}
+	printSuccess(fmt.Sprintf("已删除配置「%s」", target.Name))
 }
