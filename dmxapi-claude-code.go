@@ -4637,67 +4637,76 @@ func editNamedConfig(nc NamedConfig) {
 		os.Unsetenv(envAgentTeams)
 	}
 
-	// 基于快照的值拷贝，可安全就地修改
-	cfg := nc.Config
+	// 循环展示编辑菜单：case 1 在 URL 第一步回退时不保存，回到此菜单重新选择。
+	for {
+		// 每轮从快照重新值拷贝，避免上一轮中途修改残留
+		cfg := nc.Config
 
-	choice, back := runItemMenu(fmt.Sprintf("编辑配置「%s」", nc.Name), []MenuItem{
-		{"1", "修改 URL/Token", "重新配置 URL、Token 和模型"},
-		{"2", "仅配置模型", "只修改默认/各档位模型"},
-		{"3", "解决 400 报错", "禁用实验性请求头"},
-		{"4", "配置 Effort Level", "设置 ultracode 最高思考等级"},
-		{"5", "配置实验性功能", "启用/禁用 Agent Teams"},
-		{"6", "配置 VSCode 插件", "写入 VSCode settings.json"},
-	}, true)
-	if back {
-		return // 编辑菜单 ESC → 不保存，返回上一界面
-	}
-	fmt.Println()
-	switch choice {
-	case 1:
-		configureURLTokenWithValidation(&cfg)
-	case 2:
-		configureModels(&cfg, false)
-	case 3:
-		printSectionHeader("修复 Claude Code 400 请求头错误")
-		printInfo("禁用实验性请求头，解决 Claude Code 400 传入请求头错误问题")
+		choice, back := runItemMenu(fmt.Sprintf("编辑配置「%s」", nc.Name), []MenuItem{
+			{"1", "修改 URL/Token", "重新配置 URL、Token 和模型"},
+			{"2", "仅配置模型", "只修改默认/各档位模型"},
+			{"3", "解决 400 报错", "禁用实验性请求头"},
+			{"4", "配置 Effort Level", "设置 ultracode 最高思考等级"},
+			{"5", "配置实验性功能", "启用/禁用 Agent Teams"},
+			{"6", "配置 VSCode 插件", "写入 VSCode settings.json"},
+		}, true)
+		if back {
+			return // 编辑菜单 ESC → 不保存，返回上一界面
+		}
 		fmt.Println()
-	case 4:
-		configureEffortLevel(false)
-	case 5:
-		configureAgentTeams(false)
-	case 6:
-		configureVSCode(cfg, false)
-	}
+		switch choice {
+		case 1:
+			// forced 可忽略：验证成功与强制跳过均应落到下方保存；
+			// 仅 URL 第一步 ESC 返回（back）才放弃本次编辑，回到编辑菜单。
+			if _, b := configureURLTokenWithValidation(&cfg); b {
+				fmt.Println()
+				continue
+			}
+		case 2:
+			configureModels(&cfg, false)
+		case 3:
+			printSectionHeader("修复 Claude Code 400 请求头错误")
+			printInfo("禁用实验性请求头，解决 Claude Code 400 传入请求头错误问题")
+			fmt.Println()
+		case 4:
+			configureEffortLevel(false)
+		case 5:
+			configureAgentTeams(false)
+		case 6:
+			configureVSCode(cfg, false)
+		}
 
-	// 构造更新后的快照：沿用原名 → 覆盖同一文件；Teams/Effort 回读已播种的当前态
-	newNC := NamedConfig{
-		Config:      cfg,
-		Name:        nc.Name,
-		AgentTeams:  getManagedAgentTeamsValue(),
-		EffortLevel: getManagedEffortLevelValue(),
-		SavedAt:     time.Now().Format(time.RFC3339),
-		AppVersion:  appVersion,
-	}
+		// 构造更新后的快照：沿用原名 → 覆盖同一文件；Teams/Effort 回读已播种的当前态
+		newNC := NamedConfig{
+			Config:      cfg,
+			Name:        nc.Name,
+			AgentTeams:  getManagedAgentTeamsValue(),
+			EffortLevel: getManagedEffortLevelValue(),
+			SavedAt:     time.Now().Format(time.RFC3339),
+			AppVersion:  appVersion,
+		}
 
-	// 应用使其生效（内部含 saveConfig + 关闭语义清理）
-	fmt.Println()
-	if err := runWithSpinner("正在保存配置...", func() error {
-		return applyNamedConfig(newNC)
-	}); err != nil {
-		printError(fmt.Sprintf("保存配置失败: %v", err))
+		// 应用使其生效（内部含 saveConfig + 关闭语义清理）
+		fmt.Println()
+		if err := runWithSpinner("正在保存配置...", func() error {
+			return applyNamedConfig(newNC)
+		}); err != nil {
+			printError(fmt.Sprintf("保存配置失败: %v", err))
+			return
+		}
+		printSuccess("保存成功!")
+
+		// 覆盖命名配置文件（沿用原名）
+		if path, err := saveNamedConfig(newNC); err != nil {
+			printWarning(fmt.Sprintf("命名配置持久化失败: %v", err))
+		} else {
+			printSuccess(fmt.Sprintf("已更新命名配置: %s", path))
+		}
+
+		// 打印摘要
+		printSummary(newNC.Config)
 		return
 	}
-	printSuccess("保存成功!")
-
-	// 覆盖命名配置文件（沿用原名）
-	if path, err := saveNamedConfig(newNC); err != nil {
-		printWarning(fmt.Sprintf("命名配置持久化失败: %v", err))
-	} else {
-		printSuccess(fmt.Sprintf("已更新命名配置: %s", path))
-	}
-
-	// 打印摘要
-	printSummary(newNC.Config)
 }
 
 // applyNamedConfig 忠实还原命名配置快照到 Claude settings 与系统环境变量。
