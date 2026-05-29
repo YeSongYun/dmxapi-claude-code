@@ -2792,19 +2792,6 @@ func namedConfigDesc(c NamedConfig) string {
 	return host
 }
 
-// selectConfigMode 选择自定义配置的子模式
-// 返回值: 1 = 从头配置, 2 = 仅配置模型, 3 = 解决 400 报错, 4 = 配置 Effort Level, 5 = 配置实验性功能, 6 = 配置 VSCode 插件
-func selectConfigMode() int {
-	return runItemMenu("新增配置", []MenuItem{
-		{"1", "从头配置", "配置 URL、Token 和模型"},
-		{"2", "仅配置模型", "跳过 URL 和 Token 配置"},
-		{"3", "解决 400 报错", "禁用实验性请求头"},
-		{"4", "配置 Effort Level", "设置 ultracode 最高思考等级"},
-		{"5", "配置实验性功能", "启用/禁用 Agent Teams"},
-		{"6", "配置 VSCode 插件", "写入 VSCode settings.json"},
-	})
-}
-
 // selectFixOption 让用户选择要修改的内容
 func selectFixOption() int {
 	return runItemMenu("选择要修改的内容", []MenuItem{
@@ -4109,116 +4096,86 @@ func main() {
 	styledInput("按回车键退出")
 }
 
-// runAddConfigFlow 新增配置流程：原"自定义配置"子菜单逻辑。
-// 模式 1/2/3 产出完整配置快照并命名持久化；模式 4/5/6 为开关型子工具，早退、不命名。
+// runAddConfigFlow 新增配置流程：先填配置名称，再直接走"从头配置"。
 func runAddConfigFlow() {
-	configMode := selectConfigMode()
+	fmt.Println()
+	name := promptConfigName()
+	runFromScratchConfig(name)
+}
 
-	// 选完模式后先填写配置名称（仅产出命名配置的模式 1/2/3；模式 4/5/6 为开关型子工具，不命名）
-	var name string
-	if configMode == 1 || configMode == 2 || configMode == 3 {
-		fmt.Println()
-		name = promptConfigName()
+// configureURLTokenWithValidation 配置 Base URL / Token / 模型并循环验证 API 连接，
+// 直到验证通过或用户选择"强制配置"跳过验证。就地修改 *cfg。
+// 返回 forced 表示是否走了"强制跳过验证"分支（供调用方区分文案，可忽略）。
+func configureURLTokenWithValidation(cfg *Config) (forced bool) {
+	// 配置 Base URL
+	cfg.BaseURL = getNewBaseURL(cfg.BaseURL)
+
+	// 提取主机名用于提示
+	hostname := extractHost(cfg.BaseURL)
+
+	// 配置 Auth Token
+	cfg.AuthToken = getNewAuthToken(cfg.AuthToken, hostname)
+
+	// 配置模型（在 API 验证前，使验证所用模型与用户选择一致）
+	fmt.Println()
+	configureModels(cfg)
+
+	// 验证 API 连接（循环直到成功或强制跳过）
+	fmt.Println()
+	for {
+		if err := validateAPIConnection(cfg.BaseURL, cfg.AuthToken, cfg.Model); err != nil {
+			printError(fmt.Sprintf("API 连接验证失败: %v", err))
+
+			// 显示当前的URL和Key
+			fmt.Println()
+			printInfo("当前配置:")
+			fmt.Printf("  Base URL: %s\n", cfg.BaseURL)
+			fmt.Printf("  API Key:  %s\n", cfg.AuthToken)
+			fmt.Println()
+
+			// 让用户选择要修改什么
+			choice := selectFixOption()
+
+			switch choice {
+			case 1: // 修改URL
+				cfg.BaseURL = inputNewBaseURL()
+				hostname = extractHost(cfg.BaseURL)
+			case 2: // 修改Key
+				cfg.AuthToken = inputNewAuthToken(hostname)
+			case 3: // 都修改
+				cfg.BaseURL = inputNewBaseURL()
+				hostname = extractHost(cfg.BaseURL)
+				cfg.AuthToken = inputNewAuthToken(hostname)
+			case 4: // 修改模型名
+				cfg.Model = runL2Menu("默认模型", cfg.Model)
+			case 5: // 强制配置，跳过验证
+				printWarning("已跳过 API 验证，将直接保存当前配置")
+				fmt.Println()
+				return true
+			}
+			fmt.Println()
+			continue
+		}
+		break
 	}
+	printSuccess("API 连接验证成功!")
+	return false
+}
 
-	// 加载现有配置
+// runFromScratchConfig 从头配置流程：URL/Token/模型/验证 → 询问 Teams/VSCode →
+// 保存生效 → 以 name 持久化命名配置 → 打印摘要。
+func runFromScratchConfig(name string) {
+	// 加载现有配置作为默认值
 	cfg := loadExistingConfig()
 
-	// 提前收集附加配置意向（模式1时由用户选择，其他模式默认 false）
-	var wantTeams, wantVSCode bool
+	// 配置 URL / Token / 模型并验证
+	configureURLTokenWithValidation(&cfg)
 
-	// 根据配置模式执行不同流程
-	if configMode == 1 {
-		// 从头配置模式
-		// 配置 Base URL
-		cfg.BaseURL = getNewBaseURL(cfg.BaseURL)
-
-		// 提取主机名用于提示
-		hostname := extractHost(cfg.BaseURL)
-
-		// 配置 Auth Token
-		cfg.AuthToken = getNewAuthToken(cfg.AuthToken, hostname)
-
-		// 配置模型（在 API 验证前，使验证所用模型与用户选择一致）
-		fmt.Println()
-		configureModels(&cfg)
-
-		// 验证 API 连接（循环直到成功）
-		fmt.Println()
-		for {
-			if err := validateAPIConnection(cfg.BaseURL, cfg.AuthToken, cfg.Model); err != nil {
-				printError(fmt.Sprintf("API 连接验证失败: %v", err))
-
-				// 显示当前的URL和Key
-				fmt.Println()
-				printInfo("当前配置:")
-				fmt.Printf("  Base URL: %s\n", cfg.BaseURL)
-				fmt.Printf("  API Key:  %s\n", cfg.AuthToken)
-				fmt.Println()
-
-				// 让用户选择要修改什么
-				choice := selectFixOption()
-
-				switch choice {
-				case 1: // 修改URL
-					cfg.BaseURL = inputNewBaseURL()
-					hostname = extractHost(cfg.BaseURL)
-				case 2: // 修改Key
-					cfg.AuthToken = inputNewAuthToken(hostname)
-				case 3: // 都修改
-					cfg.BaseURL = inputNewBaseURL()
-					hostname = extractHost(cfg.BaseURL)
-					cfg.AuthToken = inputNewAuthToken(hostname)
-				case 4: // 修改模型名
-					cfg.Model = runL2Menu("默认模型", cfg.Model)
-				case 5: // 强制配置，跳过验证
-					printWarning("已跳过 API 验证，将直接保存当前配置")
-					fmt.Println()
-					goto saveConfig
-				}
-				fmt.Println()
-				continue
-			}
-			break
-		}
-	saveConfig:
-		printSuccess("API 连接验证成功!")
-		// 提前询问附加配置意向
-		fmt.Println()
-		wantTeams = styledConfirm("是否同时配置 Agent Teams 功能")
-		fmt.Println()
-		wantVSCode = styledConfirm("是否同时配置 VSCode 插件")
-	} else if configMode == 3 {
-		// 解决 400 报错模式：无需任何输入，直接跳到保存
-		printSectionHeader("修复 Claude Code 400 请求头错误")
-		printInfo("禁用实验性请求头，解决 Claude Code 400 传入请求头错误问题")
-		fmt.Println()
-	} else if configMode == 4 {
-		configureEffortLevel(true)
-		return
-	} else if configMode == 5 {
-		configureAgentTeams(true)
-		return
-	} else if configMode == 6 {
-		configureVSCode(cfg, true)
-		return
-	} else {
-		// 仅配置模型模式
-		if cfg.BaseURL == "" || cfg.AuthToken == "" {
-			printWarning("未检测到现有的 URL 或 Token 配置")
-			printInfo("将跳过 API 验证，仅配置模型")
-		} else {
-			printInfo("使用现有的 URL 和 Token 配置")
-			fmt.Printf("  Base URL: %s\n", cfg.BaseURL)
-			fmt.Printf("  Token: %s\n", maskToken(cfg.AuthToken))
-		}
-		fmt.Println()
-	}
-
-	// 配置模型（仅 mode 2；mode 1 已在上方提前配置）
-	if configMode == 2 {
-		configureModels(&cfg)
-	}
+	// 询问附加配置意向
+	fmt.Println()
+	wantTeams := styledConfirm("是否同时配置 Agent Teams 功能")
+	fmt.Println()
+	wantVSCode := styledConfirm("是否同时配置 VSCode 插件")
 
 	// 保存配置（带动画）
 	fmt.Println()
@@ -4231,7 +4188,7 @@ func runAddConfigFlow() {
 	}
 	printSuccess("保存成功!")
 
-	// 执行附加配置（仅 configMode==1 时 wantTeams/wantVSCode 可能为 true）
+	// 执行附加配置
 	if wantTeams {
 		fmt.Println()
 		configureAgentTeams(false)
@@ -4282,7 +4239,7 @@ func promptConfigName() string {
 	}
 }
 
-// manageNamedConfig 命名配置管理界面：应用或删除。
+// manageNamedConfig 命名配置管理界面：应用、编辑或删除。
 func manageNamedConfig(nc NamedConfig) {
 	printSectionHeader(fmt.Sprintf("配置: %s", nc.Name))
 	fmt.Println()
@@ -4299,7 +4256,8 @@ func manageNamedConfig(nc NamedConfig) {
 
 	choice := runItemMenu(fmt.Sprintf("管理配置「%s」", nc.Name), []MenuItem{
 		{"1", "应用此配置", "写入 settings.json 与系统环境变量"},
-		{"2", "删除此配置", "从 ~/.DMXAPI/claude_code 移除"},
+		{"2", "编辑此配置", "修改 URL/Token/模型/开关等"},
+		{"3", "删除此配置", "从 ~/.DMXAPI/claude_code 移除"},
 	})
 	switch choice {
 	case 1:
@@ -4314,6 +4272,9 @@ func manageNamedConfig(nc NamedConfig) {
 		printSummary(nc.Config)
 	case 2:
 		fmt.Println()
+		editNamedConfig(nc)
+	case 3:
+		fmt.Println()
 		if !styledConfirm(fmt.Sprintf("确定删除配置「%s」", nc.Name)) {
 			printInfo("已取消，未做任何更改")
 			return
@@ -4324,6 +4285,81 @@ func manageNamedConfig(nc NamedConfig) {
 		}
 		printSuccess(fmt.Sprintf("已删除配置「%s」", nc.Name))
 	}
+}
+
+// editNamedConfig 编辑已保存的命名配置：选择一项细分配置修改后，
+// 沿用原配置名称 nc.Name 覆盖保存并重新应用使其生效。
+func editNamedConfig(nc NamedConfig) {
+	// 先以快照播种 live env，使 getManaged*/各 configure* 子工具把 nc 的值视为"当前态"
+	if nc.EffortLevel != "" {
+		os.Setenv(envEffortLevel, nc.EffortLevel)
+	} else {
+		os.Unsetenv(envEffortLevel)
+	}
+	if nc.AgentTeams != "" {
+		os.Setenv(envAgentTeams, nc.AgentTeams)
+	} else {
+		os.Unsetenv(envAgentTeams)
+	}
+
+	// 基于快照的值拷贝，可安全就地修改
+	cfg := nc.Config
+
+	choice := runItemMenu(fmt.Sprintf("编辑配置「%s」", nc.Name), []MenuItem{
+		{"1", "修改 URL/Token", "重新配置 URL、Token 和模型"},
+		{"2", "仅配置模型", "只修改默认/各档位模型"},
+		{"3", "解决 400 报错", "禁用实验性请求头"},
+		{"4", "配置 Effort Level", "设置 ultracode 最高思考等级"},
+		{"5", "配置实验性功能", "启用/禁用 Agent Teams"},
+		{"6", "配置 VSCode 插件", "写入 VSCode settings.json"},
+	})
+	fmt.Println()
+	switch choice {
+	case 1:
+		configureURLTokenWithValidation(&cfg)
+	case 2:
+		configureModels(&cfg)
+	case 3:
+		printSectionHeader("修复 Claude Code 400 请求头错误")
+		printInfo("禁用实验性请求头，解决 Claude Code 400 传入请求头错误问题")
+		fmt.Println()
+	case 4:
+		configureEffortLevel(false)
+	case 5:
+		configureAgentTeams(false)
+	case 6:
+		configureVSCode(cfg, false)
+	}
+
+	// 构造更新后的快照：沿用原名 → 覆盖同一文件；Teams/Effort 回读已播种的当前态
+	newNC := NamedConfig{
+		Config:      cfg,
+		Name:        nc.Name,
+		AgentTeams:  getManagedAgentTeamsValue(),
+		EffortLevel: getManagedEffortLevelValue(),
+		SavedAt:     time.Now().Format(time.RFC3339),
+		AppVersion:  appVersion,
+	}
+
+	// 应用使其生效（内部含 saveConfig + 关闭语义清理）
+	fmt.Println()
+	if err := runWithSpinner("正在保存配置...", func() error {
+		return applyNamedConfig(newNC)
+	}); err != nil {
+		printError(fmt.Sprintf("保存配置失败: %v", err))
+		return
+	}
+	printSuccess("保存成功!")
+
+	// 覆盖命名配置文件（沿用原名）
+	if path, err := saveNamedConfig(newNC); err != nil {
+		printWarning(fmt.Sprintf("命名配置持久化失败: %v", err))
+	} else {
+		printSuccess(fmt.Sprintf("已更新命名配置: %s", path))
+	}
+
+	// 打印摘要
+	printSummary(newNC.Config)
 }
 
 // applyNamedConfig 忠实还原命名配置快照到 Claude settings 与系统环境变量。
