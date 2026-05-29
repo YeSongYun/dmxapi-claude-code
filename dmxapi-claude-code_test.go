@@ -214,11 +214,11 @@ func TestSetxOrRegAdd(t *testing.T) {
 
 func TestDetectShellProfile(t *testing.T) {
 	cases := []struct {
-		shellEnv    string
-		goos        string
-		wantFiles   []string
-		wantSrc     string
-		wantFish    bool
+		shellEnv  string
+		goos      string
+		wantFiles []string
+		wantSrc   string
+		wantFish  bool
 	}{
 		{"/bin/zsh", "darwin", []string{".zshrc", ".zprofile"}, "source ~/.zshrc", false},
 		{"/bin/bash", "darwin", []string{".bash_profile"}, "source ~/.bash_profile", false},
@@ -364,7 +364,7 @@ func TestApplyModelSuffix(t *testing.T) {
 	cases := []struct {
 		in, want string
 	}{
-		{"claude-opus-4-8-cc", "claude-opus-4-8-cc[1m]"},     // 本次新增匹配
+		{"claude-opus-4-8-cc", "claude-opus-4-8-cc[1m]"}, // 本次新增匹配
 		{"claude-opus-4-8", "claude-opus-4-8[1m]"},
 		{"claude-opus-4-7-cc", "claude-opus-4-7-cc[1m]"},     // 既有匹配保持
 		{"claude-sonnet-4-6-cc", "claude-sonnet-4-6-cc[1m]"}, // 既有匹配保持
