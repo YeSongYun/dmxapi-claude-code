@@ -43,6 +43,8 @@ const (
 	envDisableExperimentalBetas = "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"
 	envAgentTeams               = "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"
 	envEffortLevel              = "CLAUDE_CODE_EFFORT_LEVEL"
+	// defaultEffortLevel 启用 Effort Level 时写入的默认值（ultracode = xhigh + 动态 workflow 编排，最高推理深度）
+	defaultEffortLevel = "ultracode"
 
 	// VSCode settings.json 中写入配置所用的键名（claudeCode 为扩展 package.json 中定义的配置前缀）
 	vscodeEnvKey = "claudeCode.environmentVariables"
@@ -1552,6 +1554,25 @@ func saveClaudeSettingsConfig(cfg Config) error {
 	return saveClaudeSettingsConfigWithAgentTeams(cfg, getManagedAgentTeamsValue())
 }
 
+// clearEffortFromClaudeSettings 仅从 ~/.claude/settings.json 的 env 中删除
+// CLAUDE_CODE_EFFORT_LEVEL，保留其他受管键、用户其他 env 键及 JSONC 注释/格式。
+// 用于禁用 Effort Level：避免走 saveClaudeSettings 的合并写回逻辑（会回读旧值再写回，导致删不干净）。
+func clearEffortFromClaudeSettings() error {
+	settingsPath, err := getClaudeSettingsPath()
+	if err != nil {
+		return err
+	}
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		return nil // 文件不存在视为已无该键，幂等成功
+	}
+	output, _, envEmpty := removeJSONCNestedKeys(data, claudeSettingsEnvKey, []string{envEffortLevel})
+	if envEmpty {
+		output, _ = removeJSONCTopKeys(output, []string{claudeSettingsEnvKey})
+	}
+	return writeFileAtomic(settingsPath, append(output, '\n'), 0644)
+}
+
 // clearClaudeSettingsConfig 从 Claude Code settings.json 中移除本工具写入的 env 键。
 func clearClaudeSettingsConfig() clearResult {
 	settingsPath, err := getClaudeSettingsPath()
@@ -2511,7 +2532,7 @@ func selectConfigMode() int {
 		{"1", "从头配置", "配置 URL、Token 和模型"},
 		{"2", "仅配置模型", "跳过 URL 和 Token 配置"},
 		{"3", "解决 400 报错", "禁用实验性请求头"},
-		{"4", "配置 Effort Level", "设置最大思考等级"},
+		{"4", "配置 Effort Level", "设置 ultracode 最高思考等级"},
 		{"5", "配置实验性功能", "启用/禁用 Agent Teams"},
 		{"6", "配置 VSCode 插件", "写入 VSCode settings.json"},
 	})
@@ -3251,8 +3272,8 @@ func runRecommendedConfig() {
 	printInfo(fmt.Sprintf("Haiku 模型:       %s", recommendedHaikuModel))
 	printInfo(fmt.Sprintf("Sonnet 模型:      %s", recommendedSonnetModel))
 	printInfo(fmt.Sprintf("Opus 模型:        %s", recommendedOpusModel))
-	printInfo(fmt.Sprintf("Effort Level:     max (%s=max)", envEffortLevel))
-	printInfo("将自动禁用实验性请求头、设置最大推理深度，并配置 VSCode 插件")
+	printInfo(fmt.Sprintf("Effort Level:     %s (%s=%s)", defaultEffortLevel, envEffortLevel, defaultEffortLevel))
+	printInfo("将自动禁用实验性请求头、设置 ultracode 最高推理深度，并配置 VSCode 插件")
 	fmt.Println()
 
 	existing := loadExistingConfig()
@@ -3296,7 +3317,7 @@ func runRecommendedConfig() {
 	}
 
 	// 提前注入 effort level，saveConfig 内的 buildManagedEnvMap 会读取并写入所有目标位置
-	os.Setenv(envEffortLevel, "max")
+	os.Setenv(envEffortLevel, defaultEffortLevel)
 
 	fmt.Println()
 	err := runWithSpinner("正在保存配置...", func() error {
@@ -3416,7 +3437,7 @@ func configureAgentTeams(exitOnDone bool) {
 // exitOnDone=true 时末尾显示"按回车键退出"（独立运行模式时使用）；
 // 嵌入后置步骤时传 false，由 main 统一处理退出。
 func configureEffortLevel(exitOnDone bool) {
-	printSectionHeader("配置 Effort Level（最大推理深度）")
+	printSectionHeader("配置 Effort Level（ultracode 最高推理深度）")
 	fmt.Println()
 
 	currentVal := getManagedEffortLevelValue()
@@ -3426,18 +3447,18 @@ func configureEffortLevel(exitOnDone bool) {
 		printInfo(fmt.Sprintf("当前状态: %s未设置%s", colorRed, colorReset))
 	}
 	fmt.Println()
-	fmt.Printf("  CLAUDE_CODE_EFFORT_LEVEL=max 可让 Claude Code 使用最大推理深度，\n")
+	fmt.Printf("  CLAUDE_CODE_EFFORT_LEVEL=ultracode 可让 Claude Code 使用最高推理深度，\n")
 	fmt.Printf("  获得更深入的分析和更高质量的代码输出。\n")
 	fmt.Println()
 	fmt.Printf("  关闭后将移除 CLAUDE_CODE_EFFORT_LEVEL 环境变量。\n")
 	fmt.Println()
 
-	enable := runEnableDisableMenu("是否启用 Effort Level=max")
+	enable := runEnableDisableMenu("是否启用 Effort Level=ultracode")
 
 	fmt.Println()
 	var err error
 	if enable {
-		vars := map[string]string{envEffortLevel: "max"}
+		vars := map[string]string{envEffortLevel: defaultEffortLevel}
 		switch runtime.GOOS {
 		case "windows":
 			err = setEnvVarsWindows(vars)
@@ -3447,12 +3468,12 @@ func configureEffortLevel(exitOnDone bool) {
 		if err != nil {
 			printError(fmt.Sprintf("设置失败: %v", err))
 		} else {
-			os.Setenv(envEffortLevel, "max")
+			os.Setenv(envEffortLevel, defaultEffortLevel)
 			if err := saveClaudeSettingsConfigWithAgentTeams(loadExistingConfig(), getManagedAgentTeamsValue()); err != nil {
 				printError(fmt.Sprintf("Claude settings 同步失败: %v", err))
 				os.Unsetenv(envEffortLevel)
 			} else {
-				printSuccess(fmt.Sprintf("已启用 %s=max", envEffortLevel))
+				printSuccess(fmt.Sprintf("已启用 %s=%s", envEffortLevel, defaultEffortLevel))
 			}
 		}
 	} else {
@@ -3469,7 +3490,7 @@ func configureEffortLevel(exitOnDone bool) {
 				printError(fmt.Sprintf("删除失败: %v", err))
 			} else {
 				os.Unsetenv(envEffortLevel)
-				if err := saveClaudeSettingsConfigWithAgentTeams(loadExistingConfig(), getManagedAgentTeamsValue()); err != nil {
+				if err := clearEffortFromClaudeSettings(); err != nil {
 					printError(fmt.Sprintf("Claude settings 同步失败: %v", err))
 					os.Setenv(envEffortLevel, currentVal)
 				} else {

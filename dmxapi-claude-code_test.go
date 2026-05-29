@@ -1006,6 +1006,7 @@ func TestAllEnvVarKeys_ContainsAllKnownKeys(t *testing.T) {
 		"ANTHROPIC_DEFAULT_OPUS_MODEL",
 		"CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS",
 		"CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS",
+		"CLAUDE_CODE_EFFORT_LEVEL",
 	}
 
 	if len(allEnvVarKeys) != len(expected) {
