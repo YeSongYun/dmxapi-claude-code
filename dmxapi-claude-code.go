@@ -4114,6 +4114,13 @@ func main() {
 func runAddConfigFlow() {
 	configMode := selectConfigMode()
 
+	// 选完模式后先填写配置名称（仅产出命名配置的模式 1/2/3；模式 4/5/6 为开关型子工具，不命名）
+	var name string
+	if configMode == 1 || configMode == 2 || configMode == 3 {
+		fmt.Println()
+		name = promptConfigName()
+	}
+
 	// 加载现有配置
 	cfg := loadExistingConfig()
 
@@ -4212,10 +4219,6 @@ func runAddConfigFlow() {
 	if configMode == 2 {
 		configureModels(&cfg)
 	}
-
-	// 保存前填写配置名称（用于持久化为命名配置）
-	fmt.Println()
-	name := promptConfigName()
 
 	// 保存配置（带动画）
 	fmt.Println()
