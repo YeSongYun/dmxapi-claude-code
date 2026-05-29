@@ -2527,7 +2527,7 @@ func getNewAuthToken(existing, hostname string) string {
 // 返回值: 1 = dmxapi 推荐配置, 2 = 自定义配置, 3 = 清除所有配置
 func selectTopMode() int {
 	return runItemMenu("请选择配置方式", []MenuItem{
-		{"1", "dmxapi 推荐配置", "Claude Opus 4.7 一键配置"},
+		{"1", "dmxapi 推荐配置", "Claude Opus 4.8 一键配置"},
 		{"2", "自定义配置", "手动配置 URL / Token / 模型等"},
 		{"3", "清除所有配置", "移除所有已保存的配置"},
 	})
@@ -3273,7 +3273,7 @@ func saveConfig(cfg Config) error {
 // runRecommendedConfig 推荐配置一键流程：只输入 key，其他参数使用 dmxapi 推荐默认值，
 // 并自动写入 Claude settings、系统环境变量与 VSCode settings.json。
 func runRecommendedConfig() {
-	printSectionHeader("dmxapi 推荐配置 (Claude Opus 4.7)")
+	printSectionHeader("dmxapi 推荐配置 (Claude Opus 4.8)")
 	fmt.Println()
 	printInfo(fmt.Sprintf("Base URL:         %s", recommendedBaseURL))
 	printInfo(fmt.Sprintf("默认模型:         %s", recommendedModel))
