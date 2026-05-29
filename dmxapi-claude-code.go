@@ -1566,11 +1566,16 @@ func clearEffortFromClaudeSettings() error {
 	if err != nil {
 		return nil // 文件不存在视为已无该键，幂等成功
 	}
-	output, _, envEmpty := removeJSONCNestedKeys(data, claudeSettingsEnvKey, []string{envEffortLevel})
+	output, removed, envEmpty := removeJSONCNestedKeys(data, claudeSettingsEnvKey, []string{envEffortLevel})
+	if removed == 0 {
+		return nil // settings 中本就没有 effort 键，无需改写文件（保持幂等，避免累积尾随换行）
+	}
 	if envEmpty {
 		output, _ = removeJSONCTopKeys(output, []string{claudeSettingsEnvKey})
 	}
-	return writeFileAtomic(settingsPath, append(output, '\n'), 0644)
+	// 规范化为恰好一个尾随换行：removeJSONC* 已保留原文件结尾，这里不能无条件再追加。
+	output = append(bytes.TrimRight(output, "\n"), '\n')
+	return writeFileAtomic(settingsPath, output, 0644)
 }
 
 // clearClaudeSettingsConfig 从 Claude Code settings.json 中移除本工具写入的 env 键。
