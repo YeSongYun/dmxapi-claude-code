@@ -1509,6 +1509,11 @@ func applyModelSuffix(id string) string {
 	return id
 }
 
+// stripModelSuffix 去掉模型 ID 末尾的 [1m] 后缀，用于发起测试请求时还原真实模型名。
+func stripModelSuffix(id string) string {
+	return strings.TrimSuffix(id, "[1m]")
+}
+
 // buildManagedEnvMap 根据 Config 构建本工具管理的环境变量集合（纯函数）。
 // agentTeamsVal 为空时不写入 CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS。
 func buildManagedEnvMap(cfg Config, agentTeamsVal string) map[string]string {
@@ -2691,6 +2696,8 @@ type APIResponse struct {
 
 // validateAPIConnection 验证 API 连接
 func validateAPIConnection(baseURL, authToken, model string) error {
+	// 测试时去掉模型名末尾的 [1m] 后缀，用真实模型名发起请求（避免上游不识别带后缀的 id）
+	model = stripModelSuffix(model)
 	// 构建测试请求 URL
 	testURL := strings.TrimSuffix(baseURL, "/") + "/v1/messages"
 

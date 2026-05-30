@@ -379,6 +379,22 @@ func TestApplyModelSuffix(t *testing.T) {
 	}
 }
 
+func TestStripModelSuffix(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"claude-opus-4-8-cc[1m]", "claude-opus-4-8-cc"}, // 去掉 [1m] 后缀
+		{"claude-opus-4-8-cc", "claude-opus-4-8-cc"},     // 无后缀原样返回
+		{"glm-5.1-cc", "glm-5.1-cc"},                     // 第三方模型原样返回
+		{"", ""},                                         // 空字符串
+	}
+	for _, c := range cases {
+		if got := stripModelSuffix(c.in); got != c.want {
+			t.Errorf("stripModelSuffix(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
 func TestBuildVSCodeEnvVars(t *testing.T) {
 	cfg := Config{
 		BaseURL:     "https://api.example.com",
