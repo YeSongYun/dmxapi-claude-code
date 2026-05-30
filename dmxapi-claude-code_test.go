@@ -396,6 +396,7 @@ func TestStripModelSuffix(t *testing.T) {
 }
 
 func TestBuildVSCodeEnvVars(t *testing.T) {
+	t.Setenv(envEffortLevel, "") // 隔离开发机环境，避免 CLAUDE_CODE_EFFORT_LEVEL 影响结果
 	cfg := Config{
 		BaseURL:     "https://api.example.com",
 		AuthToken:   "sk-test-token",
