@@ -533,11 +533,15 @@ func isBackToken(s string) bool {
 }
 
 // styledInputWithBack 带返回功能的文本输入。
-// back=true 表示用户输入 b/back 要返回上一步；否则返回 (已 TrimSpace 的输入, false)。
+// back=true 表示用户要返回上一步：优先识别 ESC 键（终端 raw 模式），并兼容输入 b/back 文字
+// （Windows / 非终端降级路径）；否则返回 (已 TrimSpace 的输入, false)。
 // 空串语义（保留现值）仍由调用方按 value=="" 判断。
 func styledInputWithBack(label string) (value string, back bool) {
-	in := styledInput(label) // 复用：含 EOF 退出 + TrimSpace
-	if isBackToken(in) {
+	in, esc := styledInputWithEsc(label) // raw 模式：ESC 即返回；已含退格/UTF-8/EOF 处理
+	if esc {
+		return "", true
+	}
+	if isBackToken(in) { // 兼容：Windows / 非终端降级时仍可输入 b/back 返回
 		return "", true
 	}
 	return in, false
@@ -2499,7 +2503,8 @@ func clearAllConfig() bool {
 // configureVSCode 模式5交互流程：展示将写入的配置，用户确认后写入 VSCode settings.json。
 // exitOnDone=true 时末尾显示"按回车键退出"（独立运行模式5时使用）；
 // 嵌入模式1后置步骤时传 false，由 main 统一处理退出。
-func configureVSCode(cfg Config, exitOnDone bool) {
+// allowBack=true 时，写入确认按 ESC 返回上一步（back=true，静默返回不等待回车）。
+func configureVSCode(cfg Config, exitOnDone, allowBack bool) (back bool) {
 	printSectionHeader("配置 VSCode 插件")
 	fmt.Println()
 
@@ -2510,7 +2515,7 @@ func configureVSCode(cfg Config, exitOnDone bool) {
 			fmt.Println()
 			styledInput("按回车键退出")
 		}
-		return
+		return false
 	}
 	printInfo(fmt.Sprintf("目标文件: %s", settingsPath))
 	fmt.Println()
@@ -2533,13 +2538,17 @@ func configureVSCode(cfg Config, exitOnDone bool) {
 	}
 	fmt.Println()
 
-	if ok, _ := styledConfirm("确认写入 VSCode settings.json", false); !ok {
+	ok, back := styledConfirm("确认写入 VSCode settings.json", allowBack)
+	if allowBack && back {
+		return true // 静默返回上层，不走 exitOnDone 等回车
+	}
+	if !ok {
 		printInfo("已取消")
 		if exitOnDone {
 			fmt.Println()
 			styledInput("按回车键退出")
 		}
-		return
+		return false
 	}
 
 	fmt.Println()
@@ -2562,6 +2571,7 @@ func configureVSCode(cfg Config, exitOnDone bool) {
 		fmt.Println()
 		styledInput("按回车键退出")
 	}
+	return false
 }
 
 // removeEnvVarUnix 从 Unix shell 配置文件中删除指定环境变量（幂等）。
@@ -3518,18 +3528,14 @@ func renderL2Menu(typeName string, currentValue string, selectedIdx int, linesPr
 	return len(presetModels) + 7
 }
 
-// runL2Menu 运行二级菜单，返回选中的模型名
 // runL2Menu 运行二级菜单，返回选中的模型名。
-// ESC 恒为"取消修改、停留上层"（返回 currentValue, back=false）。
-// allowBack=true 时，降级/自定义文本输入额外识别 b/back 触发返回（back=true）。
+// 预设列表上的 ESC 恒为"取消修改、停留上层"（返回 currentValue, back=false）。
+// allowBack=true 时，进入文本输入（降级/自定义）后按 ESC 或输入 b/back 触发返回（back=true）。
 func runL2Menu(typeName, currentValue string, allowBack bool) (string, bool) {
 	restore, err := enterRawMode()
 	if err != nil {
 		// 降级：直接文本输入
 		hint := "(输入模型名，留空不改)"
-		if allowBack {
-			hint = "(输入模型名，留空不改，b 返回)"
-		}
 		val, back := styledInputWithBack(typeName + " " + hint)
 		if allowBack && back {
 			return currentValue, true
@@ -3561,9 +3567,6 @@ func runL2Menu(typeName, currentValue string, allowBack bool) (string, bool) {
 			if idx == len(presetModels) {
 				// 自定义输入
 				hint := "(自定义)"
-				if allowBack {
-					hint = "(自定义，b 返回)"
-				}
 				val, back := styledInputWithBack(typeName + " " + hint)
 				if allowBack && back {
 					return currentValue, true
@@ -3831,7 +3834,8 @@ func runRecommendedConfig() (back bool) {
 // configureAgentTeams 配置实验性 Agent Teams 功能环境变量。
 // exitOnDone=true 时末尾显示"按回车键退出"（独立运行模式4时使用）；
 // 嵌入模式1后置步骤时传 false，由 main 统一处理退出。
-func configureAgentTeams(exitOnDone bool) {
+// allowBack=true 时，启用/禁用选择按 ESC 返回上一步（back=true，在任何写入副作用之前）。
+func configureAgentTeams(exitOnDone, allowBack bool) (back bool) {
 	printSectionHeader("配置实验性 Agent Teams 功能")
 	fmt.Println()
 
@@ -3849,7 +3853,10 @@ func configureAgentTeams(exitOnDone bool) {
 	fmt.Printf("  环境变量，Agent Teams 功能将停止工作。\n")
 	fmt.Println()
 
-	enable, _ := runEnableDisableMenu("是否启用 Agent Teams 功能", false)
+	enable, b := runEnableDisableMenu("是否启用 Agent Teams 功能", allowBack)
+	if allowBack && b {
+		return true // 返回上一步（尚未产生任何写入副作用）
+	}
 
 	fmt.Println()
 	var err error
@@ -3917,12 +3924,14 @@ func configureAgentTeams(exitOnDone bool) {
 		fmt.Println()
 		styledInput("按回车键退出")
 	}
+	return false
 }
 
 // configureEffortLevel 配置 CLAUDE_CODE_EFFORT_LEVEL 环境变量。
 // exitOnDone=true 时末尾显示"按回车键退出"（独立运行模式时使用）；
 // 嵌入后置步骤时传 false，由 main 统一处理退出。
-func configureEffortLevel(exitOnDone bool) {
+// allowBack=true 时，启用/禁用选择按 ESC 返回上一步（back=true，在任何写入副作用之前）。
+func configureEffortLevel(exitOnDone, allowBack bool) (back bool) {
 	printSectionHeader("配置 Effort Level（ultracode 最高推理深度）")
 	fmt.Println()
 
@@ -3939,7 +3948,10 @@ func configureEffortLevel(exitOnDone bool) {
 	fmt.Printf("  关闭后将移除 CLAUDE_CODE_EFFORT_LEVEL 环境变量。\n")
 	fmt.Println()
 
-	enable, _ := runEnableDisableMenu("是否启用 Effort Level=ultracode", false)
+	enable, b := runEnableDisableMenu("是否启用 Effort Level=ultracode", allowBack)
+	if allowBack && b {
+		return true // 返回上一步（尚未产生任何写入副作用）
+	}
 
 	fmt.Println()
 	var err error
@@ -4007,6 +4019,7 @@ func configureEffortLevel(exitOnDone bool) {
 		fmt.Println()
 		styledInput("按回车键退出")
 	}
+	return false
 }
 
 // printSummary 打印配置摘要
@@ -4322,7 +4335,10 @@ func main() {
 			styledInput("按回车键退出")
 			return
 		case topClear:
-			runClearConfigMenu()
+			if back := runClearConfigMenu(); back {
+				fmt.Println()
+				continue
+			}
 			fmt.Println()
 			styledInput("按回车键退出")
 			return
@@ -4514,11 +4530,11 @@ func runFromScratchConfig(name string) (back bool) {
 			// 执行附加配置
 			if wantTeams {
 				fmt.Println()
-				configureAgentTeams(false)
+				configureAgentTeams(false, false)
 			}
 			if wantVSCode {
 				fmt.Println()
-				configureVSCode(cfg, false)
+				configureVSCode(cfg, false, false)
 			}
 
 			// 持久化命名配置快照（生效已由 saveConfig 完成；此处失败仅告警，不影响生效）
@@ -4663,17 +4679,29 @@ func editNamedConfig(nc NamedConfig) {
 				continue
 			}
 		case 2:
-			configureModels(&cfg, false)
+			if configureModels(&cfg, true) {
+				fmt.Println()
+				continue
+			}
 		case 3:
 			printSectionHeader("修复 Claude Code 400 请求头错误")
 			printInfo("禁用实验性请求头，解决 Claude Code 400 传入请求头错误问题")
 			fmt.Println()
 		case 4:
-			configureEffortLevel(false)
+			if configureEffortLevel(false, true) {
+				fmt.Println()
+				continue
+			}
 		case 5:
-			configureAgentTeams(false)
+			if configureAgentTeams(false, true) {
+				fmt.Println()
+				continue
+			}
 		case 6:
-			configureVSCode(cfg, false)
+			if configureVSCode(cfg, false, true) {
+				fmt.Println()
+				continue
+			}
 		}
 
 		// 构造更新后的快照：沿用原名 → 覆盖同一文件；Teams/Effort 回读已播种的当前态
@@ -4741,16 +4769,20 @@ func applyNamedConfig(nc NamedConfig) error {
 	return nil
 }
 
-// runClearConfigMenu 清除配置二级菜单：清除所有 / 清除单个命名配置。
-func runClearConfigMenu() {
-	choice, _ := runItemMenu("清除配置", []MenuItem{
+// runClearConfigMenu 清除配置入口菜单：清除所有 / 清除单个命名配置。
+// 返回 back=true 表示用户按 ESC 返回主菜单。
+func runClearConfigMenu() (back bool) {
+	choice, b := runItemMenu("清除配置", []MenuItem{
 		{"1", "清除所有配置", "删除全部命名配置 + 清除 Claude Code 配置"},
 		{"2", "清除用户新增配置", "选择并删除某个已保存的命名配置"},
-	}, false)
+	}, true)
+	if b {
+		return true // 返回主菜单
+	}
 	switch choice {
 	case 1:
 		if !clearAllConfig() {
-			return // 用户在二次确认时取消，命名配置也不删除
+			return false // 用户在二次确认时取消，命名配置也不删除
 		}
 		if n, err := deleteAllNamedConfigs(); err != nil {
 			printWarning(fmt.Sprintf("删除命名配置文件失败: %v", err))
@@ -4761,6 +4793,7 @@ func runClearConfigMenu() {
 	case 2:
 		runDeleteNamedConfigMenu()
 	}
+	return false
 }
 
 // runDeleteNamedConfigMenu 平铺所有命名配置，让用户选择删除其中一个。
