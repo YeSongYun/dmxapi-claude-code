@@ -3398,7 +3398,7 @@ func runEnableDisableMenu(question string, allowBack bool) (enabled bool, back b
 	}
 }
 
-// renderL1Menu 渲染一级菜单，返回渲染行数（固定10行）
+// renderL1Menu 渲染一级菜单（含模型条目 + 1 个「完成模型配置」出口项），返回渲染行数（len(entries)+7）
 func renderL1Menu(entries []modelTypeEntry, selectedIdx int, linesPrinted int, allowBack bool) int {
 	if linesPrinted > 0 {
 		fmt.Printf("\033[%dA", linesPrinted)
@@ -3444,16 +3444,33 @@ func renderL1Menu(entries []modelTypeEntry, selectedIdx int, linesPrinted int, a
 		}
 	}
 
+	// 完成项（索引 len(entries)）：作为本页的「前进/完成」出口
+	doneText := fmt.Sprintf("%s 完成模型配置", iconCheck)
+	donePad := boxWidth - 3 - visibleLength(doneText)
+	if donePad < 0 {
+		donePad = 0
+	}
+	if selectedIdx == len(entries) {
+		fmt.Printf("%s %s%s%s %s%s%s%s%s\033[K\r\n",
+			boxV, colorBrightCyan+styleBold, iconPrompt, colorReset,
+			colorBrightGreen, doneText, colorReset,
+			strings.Repeat(" ", donePad), boxV)
+	} else {
+		fmt.Printf("%s   %s%s%s%s%s\033[K\r\n",
+			boxV, styleDim, doneText, colorReset,
+			strings.Repeat(" ", donePad), boxV)
+	}
+
 	fmt.Printf("%s%s%s\033[K\r\n", boxBL, border, boxBR)
 	fmt.Printf("\033[K\r\n")
 	if allowBack {
-		fmt.Printf("  %s%s%s 导航%s  %sEnter 配置%s  %sq/Esc 返回上一步%s\033[K\r\n",
+		fmt.Printf("  %s%s%s 导航%s  %sEnter 选择/完成%s  %sq/Esc 返回上一步%s\033[K\r\n",
 			styleDim, iconNavUp, iconNavDown, colorReset, styleDim, colorReset, styleDim, colorReset)
 	} else {
-		fmt.Printf("  %s%s%s 导航%s  %sEnter 配置%s  %sq/Esc 完成%s\033[K\r\n",
+		fmt.Printf("  %s%s%s 导航%s  %sEnter 选择/完成%s  %sq/Esc 完成%s\033[K\r\n",
 			styleDim, iconNavUp, iconNavDown, colorReset, styleDim, colorReset, styleDim, colorReset)
 	}
-	return len(entries) + 6
+	return len(entries) + 7
 }
 
 // renderL2Menu 渲染二级菜单，返回渲染行数（len(presetModels)+7）
@@ -3603,16 +3620,24 @@ func runL1Menu(cfg *Config, allowBack bool) bool {
 
 	selectedIdx := 0
 	linesPrinted := 0
+	// 菜单项数 = 模型条目 + 1 个「完成模型配置」出口项
+	itemCount := len(entries) + 1
 
 	for {
 		linesPrinted = renderL1Menu(entries, selectedIdx, linesPrinted, allowBack)
 		key := readRawKey()
 		switch key {
 		case KeyUp:
-			selectedIdx = (selectedIdx - 1 + 4) % 4
+			selectedIdx = (selectedIdx - 1 + itemCount) % itemCount
 		case KeyDown:
-			selectedIdx = (selectedIdx + 1) % 4
+			selectedIdx = (selectedIdx + 1) % itemCount
 		case KeyEnter:
+			if selectedIdx == len(entries) {
+				// 焦点在「完成模型配置」项：前进到下一步（非返回）
+				restore()
+				clearMenuLines(linesPrinted)
+				return false
+			}
 			restore()
 			clearMenuLines(linesPrinted)
 			// L2 为层内子菜单，不需 b/back 返回（其 ESC 已表示取消修改）
