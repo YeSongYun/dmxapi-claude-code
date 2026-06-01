@@ -55,6 +55,11 @@ const (
 	// Claude Code settings.json 中写入环境变量所用的键名
 	claudeSettingsEnvKey = "env"
 
+	// Claude Code settings.json 顶层 attribution 对象及其子键名（控制 git commit / PR 署名）
+	claudeSettingsAttributionKey = "attribution"
+	attributionCommitKey         = "commit"
+	attributionPRKey             = "pr"
+
 	// 默认模型值
 	defaultModel       = "claude-sonnet-4-6-cc"
 	defaultHaikuModel  = "claude-haiku-4-5-20251001-cc"
@@ -109,6 +114,12 @@ var allEnvVarKeys = []string{
 	envDisableExperimentalBetas,
 	envAgentTeams,
 	envEffortLevel,
+}
+
+// attributionManagedKeys 本工具管理的 attribution 子键名，清除时使用（不动用户自填的其他子键）
+var attributionManagedKeys = []string{
+	attributionCommitKey,
+	attributionPRKey,
 }
 
 // 版本号 / 盒子宽度保持 const（运行时不会变）
@@ -259,16 +270,26 @@ type Config struct {
 	OpusModel   string `json:"opusModel"`
 }
 
+// Attribution 表示 Claude Code settings.json 顶层 attribution 对象的三态配置，
+// 用于自定义/关闭 git commit 与 PR 的署名。
+// 字段为 *string：nil=不管理(保留 Claude 默认署名)；指向 ""=关闭署名；指向文本=自定义署名。
+// omitempty 对指针仅在 nil 时省略；指向 "" 时仍序列化为 "commit": ""，正好表达“关闭”。
+type Attribution struct {
+	Commit *string `json:"commit,omitempty"`
+	PR     *string `json:"pr,omitempty"`
+}
+
 // NamedConfig 命名配置的完整快照，持久化到 ~/.DMXAPI/claude_code/<name>.json。
 // 内嵌 Config 使字段提升，且 nc.Config 可直接传给 saveConfig / applyNamedConfig。
 type NamedConfig struct {
 	Config
-	Name        string `json:"name"`
-	AgentTeams  string `json:"agentTeams,omitempty"`  // 快照时的开关值（"1" 或 ""）
-	EffortLevel string `json:"effortLevel,omitempty"` // 如 "ultracode" 或 ""
-	SavedAt     string `json:"savedAt,omitempty"`     // RFC3339
-	AppVersion  string `json:"appVersion,omitempty"`  // 写入时的 appVersion
-	FilePath    string `json:"-"`                     // 运行期填充，不序列化
+	Name        string       `json:"name"`
+	AgentTeams  string       `json:"agentTeams,omitempty"`  // 快照时的开关值（"1" 或 ""）
+	EffortLevel string       `json:"effortLevel,omitempty"` // 如 "ultracode" 或 ""
+	Attribution *Attribution `json:"attribution,omitempty"` // nil=该配置不管理 git 署名
+	SavedAt     string       `json:"savedAt,omitempty"`     // RFC3339
+	AppVersion  string       `json:"appVersion,omitempty"`  // 写入时的 appVersion
+	FilePath    string       `json:"-"`                     // 运行期填充，不序列化
 }
 
 // clearResult 记录单个位置的清除结果
@@ -1824,7 +1845,7 @@ func mergeClaudeSettings(existingJSON []byte, managedEnv map[string]string) ([]b
 	return json.MarshalIndent(settings, "", "  ")
 }
 
-// clearClaudeSettingsManagedKeys 从给定 JSON 中移除本工具管理的 env 键。
+// clearClaudeSettingsManagedKeys 从给定 JSON 中移除本工具管理的 env 键与顶层 attribution（commit/pr）。
 // 返回清理后的 JSON、是否实际移除了配置以及错误。
 // 通过基于字符串的定点删除保留用户 settings.json 中的 // 注释与尾随逗号。
 func clearClaudeSettingsManagedKeys(existingJSON []byte) ([]byte, bool, error) {
@@ -1834,37 +1855,112 @@ func clearClaudeSettingsManagedKeys(existingJSON []byte) ([]byte, bool, error) {
 	if err := json.Unmarshal(cleaned, &settings); err != nil {
 		return nil, false, fmt.Errorf("解析 Claude settings.json 失败: %v", err)
 	}
-	existingEnv, ok := settings[claudeSettingsEnvKey]
-	if !ok {
-		return nil, false, nil
-	}
-	envMap, ok := existingEnv.(map[string]interface{})
-	if !ok {
-		return nil, false, fmt.Errorf("Claude settings.json 中 env 不是对象")
-	}
-	anyHit := false
-	for _, key := range allEnvVarKeys {
-		if _, exists := envMap[key]; exists {
-			anyHit = true
-			break
+
+	// 检测 env 受管键命中
+	envHit := false
+	if existingEnv, ok := settings[claudeSettingsEnvKey]; ok {
+		envMap, ok := existingEnv.(map[string]interface{})
+		if !ok {
+			return nil, false, fmt.Errorf("Claude settings.json 中 env 不是对象")
+		}
+		for _, key := range allEnvVarKeys {
+			if _, exists := envMap[key]; exists {
+				envHit = true
+				break
+			}
 		}
 	}
-	if !anyHit {
+
+	// 检测顶层 attribution 受管子键（commit/pr）命中
+	attrHit := false
+	if attrRaw, ok := settings[claudeSettingsAttributionKey]; ok {
+		if attrMap, ok := attrRaw.(map[string]interface{}); ok {
+			for _, key := range attributionManagedKeys {
+				if _, exists := attrMap[key]; exists {
+					attrHit = true
+					break
+				}
+			}
+		}
+	}
+
+	if !envHit && !attrHit {
 		return nil, false, nil
 	}
 
-	// 定点删除 env 对象里的受管键（保留注释）
-	output, _, envBecameEmpty := removeJSONCNestedKeys(existingJSON, claudeSettingsEnvKey, allEnvVarKeys)
+	output := existingJSON
 
-	// 若 env 对象变空，把 env 顶层键也删除
-	if envBecameEmpty {
-		output, _ = removeJSONCTopKeys(output, []string{claudeSettingsEnvKey})
+	// 定点删除 env 对象里的受管键（保留注释）
+	if envHit {
+		var envBecameEmpty bool
+		output, _, envBecameEmpty = removeJSONCNestedKeys(output, claudeSettingsEnvKey, allEnvVarKeys)
+		if envBecameEmpty {
+			output, _ = removeJSONCTopKeys(output, []string{claudeSettingsEnvKey})
+		}
+	}
+
+	// 定点删除 attribution 对象里的受管子键（保留注释）
+	if attrHit {
+		var attrBecameEmpty bool
+		output, _, attrBecameEmpty = removeJSONCNestedKeys(output, claudeSettingsAttributionKey, attributionManagedKeys)
+		if attrBecameEmpty {
+			output, _ = removeJSONCTopKeys(output, []string{claudeSettingsAttributionKey})
+		}
 	}
 
 	return output, true, nil
 }
 
+// mergeClaudeAttribution 在已是标准 JSON（非 JSONC）的 settings 字节流上写入顶层 attribution 三态。
+// attr 中 nil 字段表示“不管理该子键”（从 settings 中删除），指向值（含 ""）表示写入该值。
+// 两子键都不存在时删除整个 attribution 顶层键。本函数经 MarshalIndent 重排，不保留注释，
+// 与 mergeClaudeSettings 的 env 写入路径行为一致。
+func mergeClaudeAttribution(jsonBytes []byte, attr Attribution) ([]byte, error) {
+	var settings map[string]interface{}
+	if err := json.Unmarshal(jsonBytes, &settings); err != nil {
+		return nil, fmt.Errorf("解析 Claude settings.json 失败: %v", err)
+	}
+	if settings == nil {
+		settings = map[string]interface{}{}
+	}
+
+	attrMap := map[string]interface{}{}
+	if existing, ok := settings[claudeSettingsAttributionKey]; ok {
+		if existingMap, ok := existing.(map[string]interface{}); ok {
+			for k, v := range existingMap {
+				attrMap[k] = v
+			}
+		}
+		// 非对象（容错）：视为空，下面按 attr 重建
+	}
+
+	if attr.Commit != nil {
+		attrMap[attributionCommitKey] = *attr.Commit
+	} else {
+		delete(attrMap, attributionCommitKey)
+	}
+	if attr.PR != nil {
+		attrMap[attributionPRKey] = *attr.PR
+	} else {
+		delete(attrMap, attributionPRKey)
+	}
+
+	if len(attrMap) == 0 {
+		delete(settings, claudeSettingsAttributionKey)
+	} else {
+		settings[claudeSettingsAttributionKey] = attrMap
+	}
+
+	return json.MarshalIndent(settings, "", "  ")
+}
+
 func saveClaudeSettingsConfigWithAgentTeams(cfg Config, agentTeamsVal string) error {
+	return saveClaudeSettingsConfigWithAttribution(cfg, agentTeamsVal, getManagedAttribution())
+}
+
+// saveClaudeSettingsConfigWithAttribution 写入 env 受管键与顶层 attribution 三态。
+// 现有 env 合并逻辑复用 mergeClaudeSettings，attribution 由 mergeClaudeAttribution 处理。
+func saveClaudeSettingsConfigWithAttribution(cfg Config, agentTeamsVal string, attr Attribution) error {
 	settingsPath, err := getClaudeSettingsPath()
 	if err != nil {
 		return err
@@ -1880,6 +1976,10 @@ func saveClaudeSettingsConfigWithAgentTeams(cfg Config, agentTeamsVal string) er
 
 	managed := buildManagedEnvMap(cfg, agentTeamsVal)
 	merged, err := mergeClaudeSettings(existingJSON, managed)
+	if err != nil {
+		return err
+	}
+	merged, err = mergeClaudeAttribution(merged, attr)
 	if err != nil {
 		return err
 	}
@@ -2034,6 +2134,74 @@ func getManagedEffortLevelValue() string {
 		return value
 	}
 	return loadConfigFromClaudeSettings().EffortLevel
+}
+
+// loadAttributionFromClaudeSettings 从 Claude Code settings.json 顶层 attribution 读取 git 署名配置。
+// 子键存在（含空串）→ 指向该值；子键不存在 / attribution 缺失或非对象 → nil。
+func loadAttributionFromClaudeSettings() Attribution {
+	settingsPath, err := getClaudeSettingsPath()
+	if err != nil {
+		return Attribution{}
+	}
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		return Attribution{}
+	}
+	cleaned := stripJSONC(data)
+	var settings map[string]interface{}
+	if err := json.Unmarshal(cleaned, &settings); err != nil {
+		return Attribution{}
+	}
+	attrRaw, ok := settings[claudeSettingsAttributionKey]
+	if !ok {
+		return Attribution{}
+	}
+	attrMap, ok := attrRaw.(map[string]interface{})
+	if !ok {
+		return Attribution{}
+	}
+	getPtr := func(key string) *string {
+		v, ok := attrMap[key]
+		if !ok {
+			return nil
+		}
+		if s, ok := v.(string); ok {
+			return &s
+		}
+		return nil
+	}
+	return Attribution{
+		Commit: getPtr(attributionCommitKey),
+		PR:     getPtr(attributionPRKey),
+	}
+}
+
+// getManagedAttribution 返回受管的 git 署名配置。attribution 仅存于 settings.json（不进环境变量）。
+func getManagedAttribution() Attribution {
+	return loadAttributionFromClaudeSettings()
+}
+
+// clearAttributionFromClaudeSettings 仅从 ~/.claude/settings.json 顶层 attribution 删除指定子键，
+// 保留其他子键、其他顶层键及 JSONC 注释/格式。子键全删后移除整个 attribution 顶层键。
+// fields 取 ["commit"] / ["pr"] / ["commit","pr"]。用于“恢复 Claude 默认署名”。
+func clearAttributionFromClaudeSettings(fields []string) error {
+	settingsPath, err := getClaudeSettingsPath()
+	if err != nil {
+		return err
+	}
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		return nil // 文件不存在视为已无该键，幂等成功
+	}
+	output, removed, parentEmpty := removeJSONCNestedKeys(data, claudeSettingsAttributionKey, fields)
+	if removed == 0 {
+		return nil // 本就没有相关子键，无需改写（保持幂等）
+	}
+	if parentEmpty {
+		output, _ = removeJSONCTopKeys(output, []string{claudeSettingsAttributionKey})
+	}
+	output = append(bytes.TrimRight(output, "\n"), '\n')
+	return writeFileAtomic(settingsPath, output, 0644)
 }
 
 // winPathToWSL 将 Windows 路径（如 C:\Users\alice）转换为 WSL 挂载路径（/mnt/c/Users/alice）。
@@ -4123,6 +4291,96 @@ func configureEffortLevel(exitOnDone, allowBack bool) (back bool) {
 	return false
 }
 
+// attributionStateDesc 返回某个署名字段的当前态可读描述（仅 ASCII/中文，避免 ambiguous 宽度字符）。
+func attributionStateDesc(p *string) string {
+	if p == nil {
+		return "Claude 默认署名"
+	}
+	if *p == "" {
+		return "已关闭（不署名）"
+	}
+	return fmt.Sprintf("自定义: %s", *p)
+}
+
+// configureAttributionField 对单个署名字段（commit 或 pr）做三态选择，直接修改 *target 指针。
+// 返回 back=true 表示用户在本子菜单按 ESC 返回上一层（不改动 target）。
+func configureAttributionField(fieldLabel string, target **string, allowBack bool) (back bool) {
+	choice, b := runItemMenu(fmt.Sprintf("配置 %s 署名", fieldLabel), []MenuItem{
+		{"1", "自定义署名文本", "输入要写入的署名内容"},
+		{"2", "关闭署名", "写入空串，Claude Code 不再添加署名"},
+		{"3", "恢复 Claude 默认", "移除该项，使用 Claude Code 默认署名"},
+	}, allowBack)
+	if allowBack && b {
+		return true
+	}
+	switch choice {
+	case 1:
+		fmt.Println()
+		printInfo(fmt.Sprintf("请输入 %s 署名文本（支持多行请用 \\n 表示换行）", fieldLabel))
+		val, back := styledInputWithBack(fmt.Sprintf("%s 署名", fieldLabel))
+		if back {
+			return false // 输入步骤返回：本字段保持原值，回到署名主菜单
+		}
+		v := val
+		*target = &v
+	case 2:
+		empty := ""
+		*target = &empty
+	case 3:
+		*target = nil
+	}
+	return false
+}
+
+// configureAttribution 配置 Claude Code git 署名（顶层 attribution.commit / attribution.pr）。
+// 直接操作传入的内存 *Attribution 指针，不立即写文件，由调用方统一持久化。
+// 主菜单按 ESC（或降级模式输入 b）表示“配置完毕返回”，始终可退出本循环。
+func configureAttribution(attr *Attribution) {
+	for {
+		printSectionHeader("配置 Git 署名 (attribution)")
+		fmt.Println()
+		printInfo(fmt.Sprintf("当前 Commit 署名: %s", attributionStateDesc(attr.Commit)))
+		printInfo(fmt.Sprintf("当前 PR 署名:     %s", attributionStateDesc(attr.PR)))
+		fmt.Println()
+		printInfo("控制 git commit 与 Pull Request 中由 Claude Code 添加的署名文本。")
+		printInfo("ESC 或 b 返回上一级。")
+		fmt.Println()
+
+		choice, b := runItemMenu("选择要配置的项", []MenuItem{
+			{"1", "配置 Commit 署名", attributionStateDesc(attr.Commit)},
+			{"2", "配置 PR 署名", attributionStateDesc(attr.PR)},
+		}, true)
+		if b {
+			return // 配置完毕返回上一级
+		}
+		fmt.Println()
+		switch choice {
+		case 1:
+			configureAttributionField("Commit", &attr.Commit, true)
+		case 2:
+			configureAttributionField("PR", &attr.PR, true)
+		}
+		fmt.Println()
+	}
+}
+
+// normalizeAttribution 把 *Attribution 拷贝为可安全编辑的值；nil 入参返回零值 Attribution{}。
+func normalizeAttribution(p *Attribution) Attribution {
+	if p == nil {
+		return Attribution{}
+	}
+	return *p
+}
+
+// attributionForSnapshot 将编辑态 Attribution 规范化为快照存储用的 *Attribution：
+// 两子键都未管理（均 nil）时返回 nil，避免持久化出空对象 "attribution":{}。
+func attributionForSnapshot(attr Attribution) *Attribution {
+	if attr.Commit == nil && attr.PR == nil {
+		return nil
+	}
+	return &attr
+}
+
 // printSummary 打印配置摘要
 func printSummary(cfg Config) {
 	fmt.Println()
@@ -4700,6 +4958,14 @@ func manageNamedConfig(nc NamedConfig) (back bool) {
 	if nc.AgentTeams != "" {
 		printInfo("Agent Teams:  已启用")
 	}
+	if nc.Attribution != nil {
+		if nc.Attribution.Commit != nil {
+			printInfo(fmt.Sprintf("Commit 署名:   %s", attributionStateDesc(nc.Attribution.Commit)))
+		}
+		if nc.Attribution.PR != nil {
+			printInfo(fmt.Sprintf("PR 署名:       %s", attributionStateDesc(nc.Attribution.PR)))
+		}
+	}
 	fmt.Println()
 
 	choice, back := runItemMenu(fmt.Sprintf("管理配置「%s」", nc.Name), []MenuItem{
@@ -4754,6 +5020,9 @@ func editNamedConfig(nc NamedConfig) {
 		os.Unsetenv(envAgentTeams)
 	}
 
+	// attribution 不进环境变量，以编辑态局部值贯穿本次编辑（跨 case 累积修改）
+	attr := normalizeAttribution(nc.Attribution)
+
 	// 循环展示编辑菜单：case 1 在 URL 第一步回退时不保存，回到此菜单重新选择。
 	for {
 		// 每轮从快照重新值拷贝，避免上一轮中途修改残留
@@ -4766,6 +5035,7 @@ func editNamedConfig(nc NamedConfig) {
 			{"4", "配置 Effort Level", "设置 ultracode 最高思考等级"},
 			{"5", "配置实验性功能", "启用/禁用 Agent Teams"},
 			{"6", "配置 VSCode 插件", "写入 VSCode settings.json"},
+			{"7", "配置 Git 署名", "自定义/关闭 commit 与 PR 署名"},
 		}, true)
 		if back {
 			return // 编辑菜单 ESC → 不保存，返回上一界面
@@ -4803,6 +5073,10 @@ func editNamedConfig(nc NamedConfig) {
 				fmt.Println()
 				continue
 			}
+		case 7:
+			configureAttribution(&attr)
+			fmt.Println()
+			continue // 改的是编辑态 attr，回到编辑菜单累积其他修改后再统一保存
 		}
 
 		// 构造更新后的快照：沿用原名 → 覆盖同一文件；Teams/Effort 回读已播种的当前态
@@ -4811,6 +5085,7 @@ func editNamedConfig(nc NamedConfig) {
 			Name:        nc.Name,
 			AgentTeams:  getManagedAgentTeamsValue(),
 			EffortLevel: getManagedEffortLevelValue(),
+			Attribution: attributionForSnapshot(attr),
 			SavedAt:     time.Now().Format(time.RFC3339),
 			AppVersion:  appVersion,
 		}
@@ -4866,6 +5141,14 @@ func applyNamedConfig(nc NamedConfig) error {
 	if nc.AgentTeams == "" {
 		_ = removeManagedEnvVar(envAgentTeams)
 		_ = saveClaudeSettingsConfigWithAgentTeams(nc.Config, "")
+	}
+
+	// 4) attribution 三态落定：必须放在上述 saveClaudeSettings* 调用之后，
+	// 否则会被那些步骤回读的 getManagedAttribution()（文件旧值）覆盖。
+	// nil 字段由 mergeClaudeAttribution 从 settings 删除，实现“快照未管理则清除残留”。
+	attr := normalizeAttribution(nc.Attribution)
+	if err := saveClaudeSettingsConfigWithAttribution(nc.Config, getManagedAgentTeamsValue(), attr); err != nil {
+		return err
 	}
 	return nil
 }

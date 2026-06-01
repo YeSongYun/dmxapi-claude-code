@@ -1490,16 +1490,16 @@ func TestFitWidth(t *testing.T) {
 		max  int
 		want string
 	}{
-		{"hello", 10, "hello"},     // 未超宽，原样返回
-		{"hello", 5, "hello"},      // 恰好等于上限
-		{"hello", 4, "h..."},       // 超宽，省略号
-		{"hello", 3, "..."},        // 上限恰为 3，只剩省略号
-		{"hello", 2, "he"},         // 上限 <3，硬截断不留省略号
-		{"hello", 0, ""},           // 上限 0
-		{"hello", -1, ""},          // 负上限
-		{"你好世界", 2, "你"},          // CJK：上限 2 容纳一个全宽字符
-		{"你好世界", 3, "..."},        // CJK：上限 3 放不下「你」+省略号，只剩省略号
-		{"你好世界", 5, "你..."},       // CJK：「你」(2) + "..."(3) = 5
+		{"hello", 10, "hello"}, // 未超宽，原样返回
+		{"hello", 5, "hello"},  // 恰好等于上限
+		{"hello", 4, "h..."},   // 超宽，省略号
+		{"hello", 3, "..."},    // 上限恰为 3，只剩省略号
+		{"hello", 2, "he"},     // 上限 <3，硬截断不留省略号
+		{"hello", 0, ""},       // 上限 0
+		{"hello", -1, ""},      // 负上限
+		{"你好世界", 2, "你"},       // CJK：上限 2 容纳一个全宽字符
+		{"你好世界", 3, "..."},     // CJK：上限 3 放不下「你」+省略号，只剩省略号
+		{"你好世界", 5, "你..."},    // CJK：「你」(2) + "..."(3) = 5
 	}
 	for _, c := range cases {
 		if got := fitWidth(c.in, c.max); got != c.want {
@@ -1619,4 +1619,406 @@ func stripControl(s string) string {
 		b.WriteRune(r)
 	}
 	return b.String()
+}
+
+// ptr 返回指向给定字符串的指针，便于构造 Attribution 三态。
+func ptr(s string) *string { return &s }
+
+func TestMergeClaudeAttribution(t *testing.T) {
+	t.Run("自定义文本写入顶层", func(t *testing.T) {
+		out, err := mergeClaudeAttribution([]byte(`{}`), Attribution{Commit: ptr("by me"), PR: ptr("pr text")})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var result map[string]interface{}
+		if err := json.Unmarshal(out, &result); err != nil {
+			t.Fatal(err)
+		}
+		attr, ok := result[claudeSettingsAttributionKey].(map[string]interface{})
+		if !ok {
+			t.Fatal("attribution 应为对象")
+		}
+		if attr[attributionCommitKey] != "by me" || attr[attributionPRKey] != "pr text" {
+			t.Errorf("attribution 内容不符: %v", attr)
+		}
+	})
+
+	t.Run("空串表示关闭署名", func(t *testing.T) {
+		out, err := mergeClaudeAttribution([]byte(`{}`), Attribution{Commit: ptr("")})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var result map[string]interface{}
+		if err := json.Unmarshal(out, &result); err != nil {
+			t.Fatal(err)
+		}
+		attr := result[claudeSettingsAttributionKey].(map[string]interface{})
+		v, exists := attr[attributionCommitKey]
+		if !exists {
+			t.Fatal("commit 子键应存在（空串）")
+		}
+		if v != "" {
+			t.Errorf("commit 应为空串，得 %v", v)
+		}
+		if _, exists := attr[attributionPRKey]; exists {
+			t.Error("未设置的 pr 子键不应出现")
+		}
+	})
+
+	t.Run("nil 字段删除子键，全删后移除顶层", func(t *testing.T) {
+		existing := []byte(`{"attribution": {"commit": "old", "pr": "oldpr"}}`)
+		out, err := mergeClaudeAttribution(existing, Attribution{Commit: nil, PR: nil})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var result map[string]interface{}
+		if err := json.Unmarshal(out, &result); err != nil {
+			t.Fatal(err)
+		}
+		if _, exists := result[claudeSettingsAttributionKey]; exists {
+			t.Error("两子键都 nil 时应移除整个 attribution 顶层键")
+		}
+	})
+
+	t.Run("commit 与 pr 同时写入，不破坏 env 与其他键", func(t *testing.T) {
+		existing := []byte(`{
+			"env": {"ANTHROPIC_BASE_URL": "https://x"},
+			"permissions": {"allow": []},
+			"attribution": {"pr": "old-pr"}
+		}`)
+		// 完整快照语义：传入 commit+pr，两者都落定；env/permissions 不受影响
+		out, err := mergeClaudeAttribution(existing, Attribution{Commit: ptr("new-commit"), PR: ptr("keep-pr")})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var result map[string]interface{}
+		if err := json.Unmarshal(out, &result); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := result["env"]; !ok {
+			t.Error("env 应保留")
+		}
+		if _, ok := result["permissions"]; !ok {
+			t.Error("permissions 应保留")
+		}
+		attr := result[claudeSettingsAttributionKey].(map[string]interface{})
+		if attr[attributionCommitKey] != "new-commit" {
+			t.Errorf("commit 应被写入，得 %v", attr[attributionCommitKey])
+		}
+		if attr[attributionPRKey] != "keep-pr" {
+			t.Errorf("pr 应被写入，得 %v", attr[attributionPRKey])
+		}
+	})
+
+	t.Run("nil 字段删除对应子键（完整覆盖语义）", func(t *testing.T) {
+		existing := []byte(`{"attribution": {"commit": "old-c", "pr": "old-p"}}`)
+		// 只给 commit 指定值，pr=nil → pr 子键应被删除（快照未管理则清除）
+		out, err := mergeClaudeAttribution(existing, Attribution{Commit: ptr("new-c"), PR: nil})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var result map[string]interface{}
+		if err := json.Unmarshal(out, &result); err != nil {
+			t.Fatal(err)
+		}
+		attr := result[claudeSettingsAttributionKey].(map[string]interface{})
+		if attr[attributionCommitKey] != "new-c" {
+			t.Errorf("commit 应更新为 new-c，得 %v", attr[attributionCommitKey])
+		}
+		if _, exists := attr[attributionPRKey]; exists {
+			t.Error("nil 的 pr 字段应删除对应子键")
+		}
+	})
+
+	t.Run("保留 attribution 中本工具不管理的子键", func(t *testing.T) {
+		existing := []byte(`{"attribution": {"custom": "user-value"}}`)
+		out, err := mergeClaudeAttribution(existing, Attribution{Commit: ptr("c")})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var result map[string]interface{}
+		if err := json.Unmarshal(out, &result); err != nil {
+			t.Fatal(err)
+		}
+		attr := result[claudeSettingsAttributionKey].(map[string]interface{})
+		if attr["custom"] != "user-value" {
+			t.Errorf("用户自填子键应保留，得 %v", attr["custom"])
+		}
+		if attr[attributionCommitKey] != "c" {
+			t.Error("commit 应写入")
+		}
+	})
+}
+
+func TestLoadAttributionFromClaudeSettings(t *testing.T) {
+	withSettings := func(t *testing.T, content string) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		if runtime.GOOS == "windows" {
+			t.Setenv("USERPROFILE", home)
+		}
+		settingsPath := claudeSettingsPathFor(home)
+		if err := os.MkdirAll(filepath.Dir(settingsPath), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if content != "" {
+			if err := os.WriteFile(settingsPath, []byte(content), 0644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	t.Run("缺 attribution 顶层返回全 nil", func(t *testing.T) {
+		withSettings(t, `{"env": {"ANTHROPIC_BASE_URL": "https://x"}}`)
+		attr := loadAttributionFromClaudeSettings()
+		if attr.Commit != nil || attr.PR != nil {
+			t.Errorf("应全 nil，得 %v", attr)
+		}
+	})
+
+	t.Run("空串子键读回非 nil 空串", func(t *testing.T) {
+		withSettings(t, `{"attribution": {"commit": ""}}`)
+		attr := loadAttributionFromClaudeSettings()
+		if attr.Commit == nil {
+			t.Fatal("commit 应为非 nil")
+		}
+		if *attr.Commit != "" {
+			t.Errorf("commit 应为空串，得 %q", *attr.Commit)
+		}
+		if attr.PR != nil {
+			t.Error("缺失的 pr 应为 nil")
+		}
+	})
+
+	t.Run("attribution 非对象时容错返回全 nil", func(t *testing.T) {
+		withSettings(t, `{"attribution": "oops"}`)
+		attr := loadAttributionFromClaudeSettings()
+		if attr.Commit != nil || attr.PR != nil {
+			t.Errorf("非对象应容错为全 nil，得 %v", attr)
+		}
+	})
+}
+
+func TestClearAttributionFromClaudeSettings_PreservesComments(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", home)
+	}
+	settingsPath := claudeSettingsPathFor(home)
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("删子键保留注释，删空后移除顶层", func(t *testing.T) {
+		content := `{
+    // 用户注释
+    "permissions": {"allow": ["Read(README.md)"]},
+    "attribution": {
+        "commit": "x",
+        "pr": "y"
+    }
+}`
+		if err := os.WriteFile(settingsPath, []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := clearAttributionFromClaudeSettings([]string{attributionCommitKey, attributionPRKey}); err != nil {
+			t.Fatal(err)
+		}
+		got, _ := os.ReadFile(settingsPath)
+		s := string(got)
+		if !strings.Contains(s, "// 用户注释") {
+			t.Error("注释应保留")
+		}
+		if strings.Contains(s, "attribution") {
+			t.Error("子键全删后应移除 attribution 顶层键")
+		}
+		cleaned := stripJSONC(got)
+		var parsed map[string]interface{}
+		if err := json.Unmarshal(cleaned, &parsed); err != nil {
+			t.Fatalf("结果不是合法 JSONC: %v\n%s", err, s)
+		}
+		if _, ok := parsed["permissions"]; !ok {
+			t.Error("permissions 应保留")
+		}
+	})
+
+	t.Run("只删一个子键保留另一个", func(t *testing.T) {
+		content := `{"attribution": {"commit": "x", "pr": "y"}}`
+		if err := os.WriteFile(settingsPath, []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := clearAttributionFromClaudeSettings([]string{attributionCommitKey}); err != nil {
+			t.Fatal(err)
+		}
+		attr := loadAttributionFromClaudeSettings()
+		if attr.Commit != nil {
+			t.Error("commit 应被删除")
+		}
+		if attr.PR == nil || *attr.PR != "y" {
+			t.Errorf("pr 应保留为 y，得 %v", attr.PR)
+		}
+	})
+}
+
+func TestClearClaudeSettingsManagedKeys_RemovesAttribution(t *testing.T) {
+	t.Run("env 与 attribution 同时清除，保留注释与非受管键", func(t *testing.T) {
+		existing := []byte(`{
+    // 顶层注释
+    "permissions": {"allow": []},
+    "env": {
+        "FOO": "bar",
+        "ANTHROPIC_BASE_URL": "https://x"
+    },
+    "attribution": {
+        "commit": "c",
+        "pr": "p"
+    }
+}`)
+		out, removed, err := clearClaudeSettingsManagedKeys(existing)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !removed {
+			t.Fatal("应判定为有改动")
+		}
+		s := string(out)
+		if !strings.Contains(s, "// 顶层注释") {
+			t.Error("注释应保留")
+		}
+		cleaned := stripJSONC(out)
+		var result map[string]interface{}
+		if err := json.Unmarshal(cleaned, &result); err != nil {
+			t.Fatalf("结果非法: %v\n%s", err, s)
+		}
+		if _, ok := result[claudeSettingsAttributionKey]; ok {
+			t.Error("attribution 顶层键应被移除")
+		}
+		env := result[claudeSettingsEnvKey].(map[string]interface{})
+		if _, ok := env[envBaseURL]; ok {
+			t.Error("受管 env 键应被移除")
+		}
+		if env["FOO"] != "bar" {
+			t.Error("非受管 env 键应保留")
+		}
+	})
+
+	t.Run("仅有 attribution 无 env 受管键也判定为有改动", func(t *testing.T) {
+		existing := []byte(`{"attribution": {"commit": "c"}}`)
+		out, removed, err := clearClaudeSettingsManagedKeys(existing)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !removed {
+			t.Fatal("仅有 attribution 时也应判定为有改动")
+		}
+		cleaned := stripJSONC(out)
+		var result map[string]interface{}
+		if err := json.Unmarshal(cleaned, &result); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := result[claudeSettingsAttributionKey]; ok {
+			t.Error("attribution 应被移除")
+		}
+	})
+
+	t.Run("attribution 中只删受管子键，保留用户自填子键", func(t *testing.T) {
+		existing := []byte(`{"attribution": {"commit": "c", "custom": "keep"}}`)
+		out, removed, err := clearClaudeSettingsManagedKeys(existing)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !removed {
+			t.Fatal("应有改动")
+		}
+		cleaned := stripJSONC(out)
+		var result map[string]interface{}
+		if err := json.Unmarshal(cleaned, &result); err != nil {
+			t.Fatal(err)
+		}
+		attr, ok := result[claudeSettingsAttributionKey].(map[string]interface{})
+		if !ok {
+			t.Fatal("仍有用户子键时 attribution 顶层应保留")
+		}
+		if attr["custom"] != "keep" {
+			t.Error("用户自填子键应保留")
+		}
+		if _, ok := attr[attributionCommitKey]; ok {
+			t.Error("受管 commit 子键应被删除")
+		}
+	})
+}
+
+func TestNamedConfigAttributionRoundTrip(t *testing.T) {
+	t.Run("nil Attribution 序列化时省略字段", func(t *testing.T) {
+		nc := NamedConfig{Name: "x", Config: Config{BaseURL: "https://x"}}
+		data, err := json.Marshal(nc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(data), "attribution") {
+			t.Errorf("nil Attribution 不应序列化 attribution 字段: %s", data)
+		}
+	})
+
+	t.Run("空串子键往返保持非 nil 空串", func(t *testing.T) {
+		nc := NamedConfig{Name: "x", Attribution: &Attribution{Commit: ptr("")}}
+		data, err := json.Marshal(nc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(data), `"commit":""`) {
+			t.Errorf(`应序列化为 "commit":""，得 %s`, data)
+		}
+		var back NamedConfig
+		if err := json.Unmarshal(data, &back); err != nil {
+			t.Fatal(err)
+		}
+		if back.Attribution == nil || back.Attribution.Commit == nil {
+			t.Fatal("往返后 Commit 应为非 nil")
+		}
+		if *back.Attribution.Commit != "" {
+			t.Errorf("往返后应为空串，得 %q", *back.Attribution.Commit)
+		}
+	})
+}
+
+func TestSaveClaudeSettingsConfigWithAgentTeams_PreservesAttribution(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", home)
+	}
+	// 清空可能影响 buildManagedEnvMap 的开关
+	t.Setenv(envAgentTeams, "")
+	t.Setenv(envEffortLevel, "")
+
+	settingsPath := claudeSettingsPathFor(home)
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	// 预置一个含 attribution 的 settings.json
+	content := `{"attribution": {"commit": "preset", "pr": "preset-pr"}}`
+	if err := os.WriteFile(settingsPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// 写 env 受管键，不应触碰 attribution（内部回读 getManagedAttribution 原样写回）
+	cfg := Config{BaseURL: "https://x", AuthToken: "sk-1", Model: "m"}
+	if err := saveClaudeSettingsConfigWithAgentTeams(cfg, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	attr := loadAttributionFromClaudeSettings()
+	if attr.Commit == nil || *attr.Commit != "preset" {
+		t.Errorf("commit 署名应原样保留，得 %v", attr.Commit)
+	}
+	if attr.PR == nil || *attr.PR != "preset-pr" {
+		t.Errorf("pr 署名应原样保留，得 %v", attr.PR)
+	}
+	// 同时确认 env 受管键确实写入了
+	loaded := loadConfigFromClaudeSettings()
+	if loaded.BaseURL != "https://x" {
+		t.Errorf("env 受管键应写入，得 BaseURL=%q", loaded.BaseURL)
+	}
 }
