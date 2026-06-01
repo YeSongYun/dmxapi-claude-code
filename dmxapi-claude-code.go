@@ -4352,15 +4352,16 @@ func configureAttribution(attr *Attribution) {
 		printInfo(fmt.Sprintf("当前 PR 署名:     %s", attributionStateDesc(attr.PR)))
 		fmt.Println()
 		printInfo("控制 git commit 与 Pull Request 中由 Claude Code 添加的署名文本。")
-		printInfo("ESC 或 b 返回上一级。")
+		printInfo("改完后选择「完成配置」或按 ESC 返回，修改将自动保存。")
 		fmt.Println()
 
 		choice, b := runItemMenu("选择要配置的项", []MenuItem{
 			{"1", "配置 Commit 署名", attributionStateDesc(attr.Commit)},
 			{"2", "配置 PR 署名", attributionStateDesc(attr.PR)},
+			{"3", "完成配置", "保存当前署名设置并返回"},
 		}, true)
 		if b {
-			return // 配置完毕返回上一级
+			return // ESC：等同完成，配置态已在内存，由调用方统一持久化
 		}
 		fmt.Println()
 		switch choice {
@@ -4368,6 +4369,8 @@ func configureAttribution(attr *Attribution) {
 			configureAttributionField("Commit", &attr.Commit, true)
 		case 2:
 			configureAttributionField("PR", &attr.PR, true)
+		case 3:
+			return // 完成配置：带着已修改的 attr 返回，由调用方统一持久化
 		}
 		fmt.Println()
 	}
