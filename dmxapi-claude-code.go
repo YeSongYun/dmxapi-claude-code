@@ -5029,7 +5029,8 @@ func promptConfigName() (name string, back bool) {
 }
 
 // manageNamedConfig 命名配置管理界面：应用、编辑或删除。
-// 返回 back=true 表示用户在管理菜单按 ESC 返回主菜单。
+// 返回 back=true 表示应回到主菜单：用户按 ESC 返回，或删除分支处理完毕
+// （删除后主菜单会重新 listNamedConfigs 刷新列表）。
 func manageNamedConfig(nc NamedConfig) (back bool) {
 	printSectionHeader(fmt.Sprintf("配置: %s", nc.Name))
 	fmt.Println()

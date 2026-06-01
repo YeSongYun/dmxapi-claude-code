@@ -399,7 +399,11 @@ func TestBuildVSCodeEnvVars(t *testing.T) {
 	t.Setenv(envEffortLevel, "") // 隔离开发机环境，避免 CLAUDE_CODE_EFFORT_LEVEL 影响结果
 	// getManagedEffortLevelValue 在环境变量为空时会回退读取 ~/.claude/settings.json，
 	// 故把 HOME 指向空临时目录，防止开发机里的 EffortLevel 多塞一个变量导致计数失败。
-	t.Setenv("HOME", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", home)
+	}
 	cfg := Config{
 		BaseURL:     "https://api.example.com",
 		AuthToken:   "sk-test-token",
