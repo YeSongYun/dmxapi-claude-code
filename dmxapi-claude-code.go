@@ -2997,32 +2997,58 @@ func renderItemMenu(title string, items []MenuItem, selectedIdx int, linesPrinte
 	if linesPrinted > 0 {
 		fmt.Printf("\033[%dA", linesPrinted)
 	}
-	border := strings.Repeat(boxH, boxWidth)
+	// 行内固定开销：非选中行 = 前导(1)+占位(2)+分隔(2)=5；
+	// 选中行 = 前导(1)+提示符(iconW)+空格(1)+分隔(2)。iconPrompt 在 CJK locale 下宽度为 2。
+	iconW := visibleLength(iconPrompt)
+	selOverhead := 2 + iconW + 2
+	overhead := 5
+	if selOverhead > overhead {
+		overhead = selOverhead
+	}
+	// 盒子内宽（两条 │ 之间的列数）按最长行动态自适应，下限保持 boxWidth。
+	inner := boxWidth
+	for _, item := range items {
+		if w := overhead + visibleLength(item.Label) + visibleLength(item.Desc); w > inner {
+			inner = w
+		}
+	}
+	// 封顶到终端宽度（盒子总宽 = inner + 2 条边框），避免超出终端导致换行错位。
+	if cols, _, err := term.GetSize(int(syscall.Stdin)); err == nil && cols-2 >= 40 && inner > cols-2 {
+		inner = cols - 2
+	}
+	border := strings.Repeat(boxH, inner)
 	fmt.Printf("%s%s%s\033[K\r\n", boxTL, border, boxTR)
 	titleW := visibleLength(title)
-	lPad := (boxWidth - titleW) / 2
-	rPad := boxWidth - titleW - lPad
+	lPad := (inner - titleW) / 2
+	rPad := inner - titleW - lPad
 	fmt.Printf("%s%s%s%s%s%s%s\033[K\r\n",
 		boxV, strings.Repeat(" ", lPad), styleBold+colorBrightWhite, title, colorReset, strings.Repeat(" ", rPad), boxV)
 	fmt.Printf("%s%s%s\033[K\r\n", boxML, border, boxMR)
 	for i, item := range items {
-		labelW := visibleLength(item.Label)
-		descW := visibleLength(item.Desc)
-		pad := boxWidth - 5 - labelW - descW
+		selected := i == selectedIdx
+		lineOverhead := 5
+		if selected {
+			lineOverhead = selOverhead
+		}
+		// 内容超出可用宽度时，优先截断自定义名称（label）保留描述；
+		// 若描述本身已超宽（极窄终端），再兜底截断描述，确保右边框始终对齐。
+		label := fitWidth(item.Label, inner-lineOverhead-visibleLength(item.Desc))
+		desc := fitWidth(item.Desc, inner-lineOverhead-visibleLength(label))
+		pad := inner - lineOverhead - visibleLength(label) - visibleLength(desc)
 		if pad < 0 {
 			pad = 0
 		}
-		if i == selectedIdx {
+		if selected {
 			fmt.Printf("%s %s%s %s%s  %s%s%s%s%s\033[K\r\n",
 				boxV, colorBrightCyan+styleBold, iconPrompt,
-				item.Label, colorReset,
-				colorBrightCyan, item.Desc, colorReset,
+				label, colorReset,
+				colorBrightCyan, desc, colorReset,
 				strings.Repeat(" ", pad), boxV)
 		} else {
 			fmt.Printf("%s %s  %s%s  %s%s%s%s%s\033[K\r\n",
 				boxV, styleDim,
-				item.Label, colorReset,
-				styleDim, item.Desc, colorReset,
+				label, colorReset,
+				styleDim, desc, colorReset,
 				strings.Repeat(" ", pad), boxV)
 		}
 	}
@@ -3186,6 +3212,31 @@ func truncateStr(s string, maxLen int) string {
 		width += rw
 	}
 	return string(result) + "..."
+}
+
+// fitWidth 将字符串裁剪到不超过 max 显示宽度。
+// max>=3 时超长部分以 "..." 结尾；max<3 时按字符宽度硬截断（不留省略号）；max<=0 返回空串。
+func fitWidth(s string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	if visibleLength(s) <= max {
+		return s
+	}
+	if max >= 3 {
+		return truncateStr(s, max)
+	}
+	width := 0
+	var result []rune
+	for _, r := range s {
+		rw := runeWidth(r)
+		if width+rw > max {
+			break
+		}
+		result = append(result, r)
+		width += rw
+	}
+	return string(result)
 }
 
 // findPresetIndex 在 presetModels 中查找，找不到返回 -1

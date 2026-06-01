@@ -1483,3 +1483,116 @@ func TestDeleteAllNamedConfigsIn(t *testing.T) {
 		t.Errorf("remaining configs = %d, want 0", len(remaining))
 	}
 }
+
+func TestFitWidth(t *testing.T) {
+	cases := []struct {
+		in   string
+		max  int
+		want string
+	}{
+		{"hello", 10, "hello"},     // 未超宽，原样返回
+		{"hello", 5, "hello"},      // 恰好等于上限
+		{"hello", 4, "h..."},       // 超宽，省略号
+		{"hello", 3, "..."},        // 上限恰为 3，只剩省略号
+		{"hello", 2, "he"},         // 上限 <3，硬截断不留省略号
+		{"hello", 0, ""},           // 上限 0
+		{"hello", -1, ""},          // 负上限
+		{"你好世界", 2, "你"},          // CJK：上限 2 容纳一个全宽字符
+		{"你好世界", 3, "..."},        // CJK：上限 3 放不下「你」+省略号，只剩省略号
+		{"你好世界", 5, "你..."},       // CJK：「你」(2) + "..."(3) = 5
+	}
+	for _, c := range cases {
+		if got := fitWidth(c.in, c.max); got != c.want {
+			t.Errorf("fitWidth(%q, %d) = %q, want %q", c.in, c.max, got, c.want)
+		}
+		if w := visibleLength(fitWidth(c.in, c.max)); c.max > 0 && w > c.max {
+			t.Errorf("fitWidth(%q, %d) width = %d exceeds max", c.in, c.max, w)
+		}
+	}
+}
+
+// TestRenderItemMenuAlignment 校验 renderItemMenu 渲染的每一行（含超长项、各选中态、
+// CJK / 非 CJK 两种 iconPrompt 宽度）右边框 │ 始终对齐到同一列。
+func TestRenderItemMenuAlignment(t *testing.T) {
+	orig := cjkAmbiguous
+	t.Cleanup(func() { cjkAmbiguous = orig })
+
+	items := []MenuItem{
+		{"1", "dmxapi 推荐配置", "Claude Opus 4.8 一键配置"},
+		{"2", "cn站(国产模型使用)", "deepseek-v4-pro-guan-cc · www.dmxapi.cn"},
+		{"3", "新增配置", "手动配置 URL / Token / 模型等"},
+		{"4", "这是一个非常非常长的自定义配置名称用于测试对齐", "x · www.dmxapi.cn"},
+	}
+	// 两种 locale：cjkAmbiguous=true 时 iconPrompt "❯" 宽度为 2，复现选中行 off-by-one 场景。
+	for _, cjk := range []bool{false, true} {
+		cjkAmbiguous = cjk
+		for sel := range items {
+			out := captureStdout(t, func() {
+				renderItemMenu("请选择配置方式", items, sel, 0, true)
+			})
+			widths := map[int]struct{}{}
+			for _, raw := range strings.Split(out, "\n") {
+				line := stripControl(raw)
+				if !strings.HasPrefix(line, boxV) || !strings.HasSuffix(line, boxV) {
+					continue // 跳过非盒子行（空行、导航提示）
+				}
+				widths[visibleLength(line)] = struct{}{}
+			}
+			if len(widths) != 1 {
+				t.Errorf("cjk=%v sel=%d: 盒子各行宽度不一致: %v", cjk, sel, widths)
+			}
+		}
+	}
+}
+
+// captureStdout 捕获 fn 执行期间写入 os.Stdout 的内容。
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	old := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stdout = w
+	done := make(chan string, 1)
+	go func() {
+		var buf bytes.Buffer
+		buf.ReadFrom(r)
+		done <- buf.String()
+	}()
+	fn()
+	w.Close()
+	os.Stdout = old
+	return <-done
+}
+
+// stripControl 去除光标移动 / 清行 / SGR 等 CSI 序列与回车，便于按可见宽度比较。
+func stripControl(s string) string {
+	var b strings.Builder
+	inEscape, csiStarted := false, false
+	for _, r := range s {
+		if r == '\r' {
+			continue
+		}
+		if r == '\033' {
+			inEscape, csiStarted = true, false
+			continue
+		}
+		if inEscape {
+			if !csiStarted {
+				if r == '[' {
+					csiStarted = true
+				} else {
+					inEscape = false
+				}
+				continue
+			}
+			if r >= 0x40 && r <= 0x7E {
+				inEscape, csiStarted = false, false
+			}
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
