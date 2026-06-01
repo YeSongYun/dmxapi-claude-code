@@ -113,7 +113,7 @@ var allEnvVarKeys = []string{
 
 // 版本号 / 盒子宽度保持 const（运行时不会变）
 const (
-	appVersion = "1.7.4"
+	appVersion = "1.7.5"
 	boxWidth   = 60
 )
 
@@ -3006,11 +3006,14 @@ func renderItemMenu(title string, items []MenuItem, selectedIdx int, linesPrinte
 	if linesPrinted > 0 {
 		fmt.Printf("\033[%dA", linesPrinted)
 	}
-	// 行内固定开销：非选中行 = 前导(1)+占位(2)+分隔(2)=5；
-	// 选中行 = 前导(1)+提示符(iconW)+空格(1)+分隔(2)。iconPrompt 在 CJK locale 下宽度为 2。
+	// 行内真实固定开销（实际打印的非内容列）：
+	//   非选中行 = 前导(1)+占位(2)+label后分隔(2)=5；
+	//   选中行   = 前导(1)+提示符(iconW)+空格(1)+label后分隔(2)。iconPrompt 已为 ASCII，宽度恒 1。
+	const rightMargin = 2 // 内容与右边框之间的固定空白列数（只用于撑大 inner，不进 pad 计算）
 	iconW := visibleLength(iconPrompt)
 	selOverhead := 2 + iconW + 2
-	overhead := 5
+	unselOverhead := 5
+	overhead := unselOverhead // 取两者较大值作为 inner 的统一基准，保证选中切换时盒子宽度不变
 	if selOverhead > overhead {
 		overhead = selOverhead
 	}
@@ -3021,7 +3024,8 @@ func renderItemMenu(title string, items []MenuItem, selectedIdx int, linesPrinte
 		inner = w
 	}
 	for _, item := range items {
-		if w := overhead + visibleLength(item.Label) + visibleLength(item.Desc); w > inner {
+		// +rightMargin 使最长行右侧也留出固定空白，内容不紧贴右边框。
+		if w := overhead + visibleLength(item.Label) + visibleLength(item.Desc) + rightMargin; w > inner {
 			inner = w
 		}
 	}
@@ -3040,7 +3044,7 @@ func renderItemMenu(title string, items []MenuItem, selectedIdx int, linesPrinte
 	fmt.Printf("%s%s%s\033[K\r\n", boxML, border, boxMR)
 	for i, item := range items {
 		selected := i == selectedIdx
-		lineOverhead := 5
+		lineOverhead := unselOverhead
 		if selected {
 			lineOverhead = selOverhead
 		}
