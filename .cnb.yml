@@ -184,8 +184,17 @@ $:
                 exit 0
               fi
 
-              git config user.name "CNB Bot"
-              git config user.email "bot@cnb.cool"
+              # 安装 gnupg 并导入用于签名的 GPG 私钥（来自 env.yml 的 GPG_PRIVATE_KEY_B64）
+              # cnb 仓库开启了强制 GPG 签名的推送保护，自动提交必须带有效签名
+              command -v gpg >/dev/null 2>&1 || { apt-get update -qq && apt-get install -y -qq gnupg; }
+              echo "$GPG_PRIVATE_KEY_B64" | base64 -d | gpg --batch --import
+
+              # 签名身份必须与 key 的 uid/邮箱一致，签名才会被识别为 verified
+              git config user.email "yesongyun@foxmail.com"
+              git config user.name "夜松云"
+              git config user.signingkey 02CF5F475FD005EA
+              git config commit.gpgsign true
+              export GPG_TTY=$(tty) || true
 
               # 基于 origin/main 创建临时分支（避免 detached HEAD 问题）
               git fetch origin main
@@ -213,11 +222,12 @@ $:
 
               # 提交并推送临时分支到 main
               git add CHANGELOG.md
-              git commit -m "docs: update CHANGELOG.md for ${CNB_BRANCH}"
+              git commit -S -m "docs: update CHANGELOG.md for ${CNB_BRANCH}"
+              # 用 CNB 平台内置凭据回推当前仓库
+              # （GIT_USERNAME/GIT_ACCESS_TOKEN 是 GitHub 同步用的凭据，无法鉴权 cnb.cool）
               ORIGIN_URL=$(git remote get-url origin)
-              ORIGIN_WITH_CREDS=$(echo "$ORIGIN_URL" | sed "s|https://|https://${GIT_USERNAME}:${GIT_ACCESS_TOKEN}@|")
-              git remote set-url origin "$ORIGIN_WITH_CREDS"
-              if ! git push origin temp-changelog:main; then
+              PUSH_URL=$(echo "$ORIGIN_URL" | sed "s|https://|https://${CNB_TOKEN_USER_NAME}:${CNB_TOKEN}@|")
+              if ! git push "$PUSH_URL" temp-changelog:main; then
                 echo "推送 CHANGELOG.md 到 main 失败（可能存在并发冲突），跳过本次更新" >&2
                 exit 0
               fi
