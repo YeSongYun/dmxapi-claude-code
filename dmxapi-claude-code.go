@@ -127,7 +127,7 @@ var attributionManagedKeys = []string{
 
 // 版本号 / 盒子宽度保持 const（运行时不会变）
 const (
-	appVersion = "1.7.5"
+	appVersion = "1.7.6"
 	boxWidth   = 60
 )
 
