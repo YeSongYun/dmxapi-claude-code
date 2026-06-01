@@ -1523,26 +1523,49 @@ func TestRenderItemMenuAlignment(t *testing.T) {
 		{"3", "新增配置", "手动配置 URL / Token / 模型等"},
 		{"4", "这是一个非常非常长的自定义配置名称用于测试对齐", "x · www.dmxapi.cn"},
 	}
+	// 普通 title 与含用户输入的超长 title（如「管理配置「name」」）都要对齐且不 panic。
+	titles := []string{
+		"请选择配置方式",
+		"管理配置「这是一个非常非常非常长的自定义配置名称超过六十列宽度啊啊啊啊」",
+	}
 	// 两种 locale：cjkAmbiguous=true 时 iconPrompt "❯" 宽度为 2，复现选中行 off-by-one 场景。
 	for _, cjk := range []bool{false, true} {
 		cjkAmbiguous = cjk
-		for sel := range items {
-			out := captureStdout(t, func() {
-				renderItemMenu("请选择配置方式", items, sel, 0, true)
-			})
-			widths := map[int]struct{}{}
-			for _, raw := range strings.Split(out, "\n") {
-				line := stripControl(raw)
-				if !strings.HasPrefix(line, boxV) || !strings.HasSuffix(line, boxV) {
-					continue // 跳过非盒子行（空行、导航提示）
+		for _, title := range titles {
+			for sel := range items {
+				out := captureStdout(t, func() {
+					renderItemMenu(title, items, sel, 0, true)
+				})
+				widths := map[int]struct{}{}
+				for _, raw := range strings.Split(out, "\n") {
+					line := stripControl(raw)
+					if !strings.HasPrefix(line, boxV) || !strings.HasSuffix(line, boxV) {
+						continue // 跳过非盒子行（空行、导航提示）
+					}
+					widths[visibleLength(line)] = struct{}{}
 				}
-				widths[visibleLength(line)] = struct{}{}
-			}
-			if len(widths) != 1 {
-				t.Errorf("cjk=%v sel=%d: 盒子各行宽度不一致: %v", cjk, sel, widths)
+				if len(widths) != 1 {
+					t.Errorf("cjk=%v title=%q sel=%d: 盒子各行宽度不一致: %v", cjk, title, sel, widths)
+				}
 			}
 		}
 	}
+}
+
+// TestLongTitleNoPanic 校验含用户输入的超长 title（如「管理配置「name」」）在主路径
+// 与降级路径（printMenu）下都不会因 negative Repeat 而 panic。
+func TestLongTitleNoPanic(t *testing.T) {
+	longTitle := "管理配置「这是一个非常非常非常长的自定义配置名称超过六十列宽度啊啊啊啊啊」"
+	items := []MenuItem{{"1", "应用此配置", "claude-opus-4-8"}, {"2", "删除", "x"}}
+	t.Run("renderItemMenu", func(t *testing.T) {
+		_ = captureStdout(t, func() { renderItemMenu(longTitle, items, 0, 0, true) })
+	})
+	t.Run("printMenu", func(t *testing.T) {
+		_ = captureStdout(t, func() { printMenu(longTitle, items) })
+	})
+	t.Run("printBox", func(t *testing.T) {
+		_ = captureStdout(t, func() { printBox(longTitle, colorBrightWhite, []string{"line"}) })
+	})
 }
 
 // captureStdout 捕获 fn 执行期间写入 os.Stdout 的内容。

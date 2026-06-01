@@ -435,6 +435,9 @@ func printBox(title, titleColor string, lines []string) {
 	// 标题居中
 	titleVisible := visibleLength(title)
 	padding := boxWidth - titleVisible
+	if padding < 0 {
+		padding = 0 // title 超宽时不溢出 padding（避免 negative Repeat panic）
+	}
 	left := padding / 2
 	right := padding - left
 	fmt.Printf("%s%s%s%s%s%s%s\n",
@@ -486,6 +489,9 @@ func printMenu(title string, items []MenuItem) {
 	// 标题居中
 	titleVisible := visibleLength(title)
 	padding := boxWidth - titleVisible
+	if padding < 0 {
+		padding = 0 // title 超宽时不溢出 padding（避免 negative Repeat panic）
+	}
 	left := padding / 2
 	right := padding - left
 	fmt.Printf("%s%s%s%s%s%s%s\n",
@@ -3006,7 +3012,11 @@ func renderItemMenu(title string, items []MenuItem, selectedIdx int, linesPrinte
 		overhead = selOverhead
 	}
 	// 盒子内宽（两条 │ 之间的列数）按最长行动态自适应，下限保持 boxWidth。
+	// title 也可能含用户输入（如「管理配置「name」」），需一并纳入，否则长名称会撑破盒子。
 	inner := boxWidth
+	if w := visibleLength(title) + 2; w > inner { // 标题至少左右各留 1 列
+		inner = w
+	}
 	for _, item := range items {
 		if w := overhead + visibleLength(item.Label) + visibleLength(item.Desc); w > inner {
 			inner = w
@@ -3018,6 +3028,7 @@ func renderItemMenu(title string, items []MenuItem, selectedIdx int, linesPrinte
 	}
 	border := strings.Repeat(boxH, inner)
 	fmt.Printf("%s%s%s\033[K\r\n", boxTL, border, boxTR)
+	title = fitWidth(title, inner) // 极窄终端封顶后 title 仍可能超宽，截断兜底
 	titleW := visibleLength(title)
 	lPad := (inner - titleW) / 2
 	rPad := inner - titleW - lPad
