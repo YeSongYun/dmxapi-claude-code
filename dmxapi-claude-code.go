@@ -5078,13 +5078,14 @@ func manageNamedConfig(nc NamedConfig) (back bool) {
 		fmt.Println()
 		if ok, _ := styledConfirm(fmt.Sprintf("确定删除配置「%s」", nc.Name), false); !ok {
 			printInfo("已取消，未做任何更改")
-			return false
+			return true // 取消删除：回主菜单（配置仍在列表）
 		}
 		if err := deleteNamedConfig(nc.FilePath); err != nil {
 			printError(fmt.Sprintf("删除失败: %v", err))
-			return false
+			return true // 删除失败：回主菜单（配置仍在列表）
 		}
 		printSuccess(fmt.Sprintf("已删除配置「%s」", nc.Name))
+		return true // 删除成功：回主菜单（列表已刷新，被删项随之消失）
 	}
 	return false
 }
