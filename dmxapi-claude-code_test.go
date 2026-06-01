@@ -2022,3 +2022,56 @@ func TestSaveClaudeSettingsConfigWithAgentTeams_PreservesAttribution(t *testing.
 		t.Errorf("env 受管键应写入，得 BaseURL=%q", loaded.BaseURL)
 	}
 }
+
+func TestDmxapiDefaultAttribution(t *testing.T) {
+	attr := dmxapiDefaultAttribution()
+	if attr.Commit == nil || attr.PR == nil {
+		t.Fatal("commit 与 pr 都应为非 nil")
+	}
+	if *attr.Commit != recommendedAttributionText {
+		t.Errorf("commit 应为 %q，得 %q", recommendedAttributionText, *attr.Commit)
+	}
+	if *attr.PR != recommendedAttributionText {
+		t.Errorf("pr 应为 %q，得 %q", recommendedAttributionText, *attr.PR)
+	}
+	// 两指针独立：改 commit 不应影响 pr
+	*attr.Commit = "changed"
+	if *attr.PR == "changed" {
+		t.Error("commit 与 pr 应使用各自独立的指针")
+	}
+}
+
+func TestDmxapiDefaultAttribution_EndToEnd(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", home)
+	}
+	t.Setenv(envAgentTeams, "")
+	t.Setenv(envEffortLevel, "")
+
+	sp := claudeSettingsPathFor(home)
+	if err := os.MkdirAll(filepath.Dir(sp), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sp, []byte(`{"permissions": {"allow": []}}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := Config{BaseURL: "https://www.dmxapi.cn", AuthToken: "sk-x", Model: "m"}
+	if err := saveClaudeSettingsConfigWithAttribution(cfg, "", dmxapiDefaultAttribution()); err != nil {
+		t.Fatal(err)
+	}
+
+	attr := loadAttributionFromClaudeSettings()
+	if attr.Commit == nil || *attr.Commit != recommendedAttributionText {
+		t.Errorf("commit 署名应为 %q，得 %v", recommendedAttributionText, attr.Commit)
+	}
+	if attr.PR == nil || *attr.PR != recommendedAttributionText {
+		t.Errorf("pr 署名应为 %q，得 %v", recommendedAttributionText, attr.PR)
+	}
+	// env 受管键也应写入，permissions 保留
+	if loadConfigFromClaudeSettings().BaseURL != "https://www.dmxapi.cn" {
+		t.Error("env BaseURL 未写入")
+	}
+}

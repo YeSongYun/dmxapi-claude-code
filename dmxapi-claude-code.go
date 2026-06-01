@@ -73,6 +73,9 @@ const (
 	recommendedSonnetModel = "claude-sonnet-4-6-cc"
 	recommendedOpusModel   = "claude-opus-4-8-cc"
 
+	// recommendedAttributionText 新手流程默认 git 署名（写入 settings.json 顶层 attribution）
+	recommendedAttributionText = "Generated with dmxapi"
+
 	fixedDisableExperimentalBetas = "1"
 )
 
@@ -4086,6 +4089,12 @@ func runRecommendedConfig() (back bool) {
 	}
 	printSuccess("保存成功!")
 
+	// 写入 dmxapi 默认 git 署名（顶层 attribution）。此前已注入 effort env，
+	// 本调用内部 buildManagedEnvMap 会幂等重写 env，仅额外叠加 attribution。
+	if err := saveClaudeSettingsConfigWithAttribution(cfg, getManagedAgentTeamsValue(), dmxapiDefaultAttribution()); err != nil {
+		printWarning(fmt.Sprintf("Git 署名写入失败: %v", err))
+	}
+
 	fmt.Println()
 	err = runWithSpinner("正在配置 VSCode 插件...", func() error {
 		return saveVSCodeConfig(cfg)
@@ -4379,6 +4388,14 @@ func attributionForSnapshot(attr Attribution) *Attribution {
 		return nil
 	}
 	return &attr
+}
+
+// dmxapiDefaultAttribution 返回新手流程默认 git 署名：commit 与 pr 同为 recommendedAttributionText。
+// 两字段使用各自独立的指针，避免后续修改其一影响另一。
+func dmxapiDefaultAttribution() Attribution {
+	c := recommendedAttributionText
+	p := recommendedAttributionText
+	return Attribution{Commit: &c, PR: &p}
 }
 
 // printSummary 打印配置摘要
@@ -4842,10 +4859,12 @@ func runFromScratchConfig(name string) (back bool) {
 		sURLTok = iota
 		sTeams
 		sVSCode
+		sAttribution
 		sSave
 	)
 	step := sURLTok
 	wantTeams, wantVSCode := false, false
+	attr := dmxapiDefaultAttribution() // 默认 dmxapi 署名，sAttribution 步骤可覆盖
 
 	for {
 		switch step {
@@ -4873,6 +4892,21 @@ func runFromScratchConfig(name string) (back bool) {
 				continue
 			}
 			wantVSCode = v
+			step = sAttribution
+		case sAttribution:
+			fmt.Println()
+			printInfo(fmt.Sprintf("Git 署名默认: %s（直接回车采用默认，或输入自定义文本）", recommendedAttributionText))
+			val, b := styledInputWithBack("Git 署名")
+			if b {
+				step = sVSCode
+				continue
+			}
+			text := recommendedAttributionText
+			if strings.TrimSpace(val) != "" {
+				text = val
+			}
+			c, p := text, text
+			attr = Attribution{Commit: &c, PR: &p}
 			step = sSave
 		case sSave:
 			// 保存配置（带动画）
@@ -4885,6 +4919,11 @@ func runFromScratchConfig(name string) (back bool) {
 				os.Exit(1)
 			}
 			printSuccess("保存成功!")
+
+			// 写入 git 署名（顶层 attribution）。saveConfig 已落定 env，此处叠加 attribution。
+			if err := saveClaudeSettingsConfigWithAttribution(cfg, getManagedAgentTeamsValue(), attr); err != nil {
+				printWarning(fmt.Sprintf("Git 署名写入失败: %v", err))
+			}
 
 			// 执行附加配置
 			if wantTeams {
@@ -4902,6 +4941,7 @@ func runFromScratchConfig(name string) (back bool) {
 				Name:        name,
 				AgentTeams:  getManagedAgentTeamsValue(),
 				EffortLevel: getManagedEffortLevelValue(),
+				Attribution: attributionForSnapshot(attr),
 				SavedAt:     time.Now().Format(time.RFC3339),
 				AppVersion:  appVersion,
 			}
