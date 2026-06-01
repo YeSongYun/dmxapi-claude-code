@@ -63,7 +63,7 @@ func TestRuneWidthAmbiguous(t *testing.T) {
 	orig := cjkAmbiguous
 	t.Cleanup(func() { cjkAmbiguous = orig })
 
-	ambiguousRunes := []rune{'◆', '❯', '✔', '✘', '→', '↑', '↓'}
+	ambiguousRunes := []rune{'·', '◆', '❯', '✔', '✘', '→', '↑', '↓'}
 
 	// 非 CJK locale：ambiguous 字符按 1 宽度
 	cjkAmbiguous = false

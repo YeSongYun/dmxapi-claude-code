@@ -113,7 +113,7 @@ var allEnvVarKeys = []string{
 
 // 版本号 / 盒子宽度保持 const（运行时不会变）
 const (
-	appVersion = "1.7.1"
+	appVersion = "1.7.2"
 	boxWidth   = 60
 )
 
@@ -231,6 +231,8 @@ func detectCJKLocale() bool {
 // （常用段覆盖 ◆ ❯ ✔ ↑↓ 等符号）。非详尽，但覆盖本工具所用字符。
 func isAmbiguousWidth(r rune) bool {
 	switch {
+	case r == 0x00B7: // · 间隔号 U+00B7（菜单分隔符，East Asian Ambiguous，CJK 终端渲染为全角）
+		return true
 	case r >= 0x2190 && r <= 0x21FF: // 箭头 ←→↑↓
 		return true
 	case r >= 0x25A0 && r <= 0x25FF: // 几何形状 ◆◇○●
