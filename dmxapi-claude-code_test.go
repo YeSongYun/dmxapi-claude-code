@@ -63,7 +63,7 @@ func TestRuneWidthAmbiguous(t *testing.T) {
 	orig := cjkAmbiguous
 	t.Cleanup(func() { cjkAmbiguous = orig })
 
-	ambiguousRunes := []rune{'·', '◆', '❯', '✔', '✘', '→', '↑', '↓'}
+	ambiguousRunes := []rune{'◆', '❯', '✔', '✘', '→', '↑', '↓'}
 
 	// 非 CJK locale：ambiguous 字符按 1 宽度
 	cjkAmbiguous = false
@@ -1519,9 +1519,9 @@ func TestRenderItemMenuAlignment(t *testing.T) {
 
 	items := []MenuItem{
 		{"1", "dmxapi 推荐配置", "Claude Opus 4.8 一键配置"},
-		{"2", "cn站(国产模型使用)", "deepseek-v4-pro-guan-cc · www.dmxapi.cn"},
+		{"2", "cn站(国产模型使用)", "deepseek-v4-pro-guan-cc | www.dmxapi.cn"},
 		{"3", "新增配置", "手动配置 URL / Token / 模型等"},
-		{"4", "这是一个非常非常长的自定义配置名称用于测试对齐", "x · www.dmxapi.cn"},
+		{"4", "这是一个非常非常长的自定义配置名称用于测试对齐", "x | www.dmxapi.cn"},
 	}
 	// 普通 title 与含用户输入的超长 title（如「管理配置「name」」）都要对齐且不 panic。
 	titles := []string{
