@@ -4953,6 +4953,11 @@ func runFromScratchConfig(name string) (back bool) {
 			attr = Attribution{Commit: &c, PR: &p}
 			step = sSave
 		case sSave:
+			// 自动为新增配置启用思考等级（ultracode），与推荐配置流程保持一致。
+			// 提前注入进程环境变量，saveConfig 内 buildManagedEnvMap 会读取并写入所有目标位置，
+			// 后续命名配置快照 EffortLevel 也会读到该值。
+			os.Setenv(envEffortLevel, defaultEffortLevel)
+
 			// 保存配置（带动画）
 			fmt.Println()
 			err := runWithSpinner("正在保存配置...", func() error {
