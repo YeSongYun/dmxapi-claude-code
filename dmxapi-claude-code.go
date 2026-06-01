@@ -4311,6 +4311,43 @@ func attributionStateDesc(p *string) string {
 	return fmt.Sprintf("自定义: %s", *p)
 }
 
+// attributionSummaryDesc 返回 git 署名在配置摘要中的简短状态描述与颜色。
+// 合并 commit / pr 两态：一致时给出统一描述，不一致时分别标注（避免自定义长文本撑破盒子）。
+func attributionSummaryDesc(attr Attribution) (string, string) {
+	// 0=Claude 默认；1=已关闭；2=自定义
+	state := func(p *string) int {
+		if p == nil {
+			return 0
+		}
+		if *p == "" {
+			return 1
+		}
+		return 2
+	}
+	label := func(s int) string {
+		switch s {
+		case 1:
+			return "关闭"
+		case 2:
+			return "自定义"
+		default:
+			return "默认"
+		}
+	}
+	c, pr := state(attr.Commit), state(attr.PR)
+	if c == pr {
+		switch c {
+		case 1:
+			return "已关闭", colorBrightYellow
+		case 2:
+			return "自定义", colorBrightGreen
+		default:
+			return "Claude 默认", colorWhite
+		}
+	}
+	return fmt.Sprintf("commit:%s pr:%s", label(c), label(pr)), colorCyan
+}
+
 // configureAttributionField 对单个署名字段（commit 或 pr）做三态选择，直接修改 *target 指针。
 // 返回 back=true 表示用户在本子菜单按 ESC 返回上一层（不改动 target）。
 func configureAttributionField(fieldLabel string, target **string, allowBack bool) (back bool) {
@@ -4451,6 +4488,9 @@ func printSummary(cfg Config) {
 		}
 	}
 
+	// Git 署名：读取 settings.json 顶层 attribution，合并 commit/pr 两态展示
+	gitSignDisplay, gitSignColor := attributionSummaryDesc(getManagedAttribution())
+
 	lines := []string{
 		makeRow("Base URL", cfg.BaseURL, colorBrightGreen),
 		makeRow("Auth Token", maskToken(cfg.AuthToken), colorBrightYellow),
@@ -4461,6 +4501,7 @@ func printSummary(cfg Config) {
 		makeRow("Disable Betas", fixedDisableExperimentalBetas, colorMagenta),
 		makeRow("Agent Teams", agentTeamsDisplay, agentTeamsColor),
 		makeRow("Effort Level", effortLevelDisplay, effortLevelColor),
+		makeRow("Git 署名", gitSignDisplay, gitSignColor),
 		makeRow("settings.json", claudeSettingsDisplay, claudeSettingsColor),
 		makeRow("VSCode Plugin", vscodeDisplay, vscodeColor),
 	}
