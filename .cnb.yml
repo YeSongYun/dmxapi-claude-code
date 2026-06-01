@@ -55,9 +55,35 @@ $:
         - name: 生成更新日志
           image: cnbcool/default-build-env
           script:
-            - curl -sSL https://github.com/orhun/git-cliff/releases/download/v2.7.0/git-cliff-2.7.0-x86_64-unknown-linux-gnu.tar.gz | tar xz
-            - git fetch --tags origin
-            - ./git-cliff-2.7.0/git-cliff --config cliff.toml --latest --strip header
+            - |
+              curl -sSL https://github.com/orhun/git-cliff/releases/download/v2.7.0/git-cliff-2.7.0-x86_64-unknown-linux-gnu.tar.gz | tar xz
+              git fetch --tags origin >&2
+              git fetch origin main >&2
+
+              # 从 main 上 CHANGELOG.md 解析「已写入的最新版本号」（去掉 refs/tags/ 与 v 前缀）
+              LAST_VERSION=$(git show origin/main:CHANGELOG.md 2>/dev/null \
+                | grep -m1 '^## ' | sed -E 's/^## +//; s/ .*//; s#refs/tags/##; s/^v//')
+
+              CLIFF=./git-cliff-2.7.0/git-cliff
+              # 能定位上次版本 tag → 生成「上次版本..本次 tag」区间，补齐其后所有版本；否则回退 --latest
+              if [ -n "$LAST_VERSION" ] && git rev-parse -q --verify "refs/tags/v${LAST_VERSION}" >/dev/null; then
+                echo "区间生成: v${LAST_VERSION}..${CNB_BRANCH}" >&2
+                NOTES=$($CLIFF --config cliff.toml "v${LAST_VERSION}..${CNB_BRANCH}" --strip header)
+              elif [ -n "$LAST_VERSION" ] && git rev-parse -q --verify "refs/tags/${LAST_VERSION}" >/dev/null; then
+                echo "区间生成: ${LAST_VERSION}..${CNB_BRANCH}" >&2
+                NOTES=$($CLIFF --config cliff.toml "${LAST_VERSION}..${CNB_BRANCH}" --strip header)
+              else
+                echo "未能定位上次版本 tag，回退 --latest" >&2
+                NOTES=$($CLIFF --config cliff.toml --latest --strip header)
+              fi
+
+              # 空区间时 git-cliff 会吐占位符「## 未发布版本」（非空，会骗过下游空判断）。
+              # 仅当含真实版本块（## 后跟数字）才输出，否则输出空串让下游跳过回推（重跑幂等）。
+              if echo "$NOTES" | grep -qE '^## [0-9]'; then
+                echo "$NOTES"
+              else
+                echo "区间无新版本（如 CI 对已写入版本重跑），输出空" >&2
+              fi
           exports:
             stdout: RELEASE_NOTES
 
@@ -66,6 +92,11 @@ $:
           image: cnbcool/default-build-env
           script:
             - |
+              # RELEASE_NOTES 为空（区间无新版本）→ 直接退出，跳过 AI 与回推（重跑幂等）
+              if [ -z "${RELEASE_NOTES}" ]; then
+                echo "RELEASE_NOTES 为空，跳过 AI 润色" >&2
+                exit 0
+              fi
               # 将 prompt 模板写入临时文件（避免 shell 特殊字符问题）
               cat > /tmp/ai_prompt.txt << 'PROMPT_EOF'
               你是一个软件更新日志编辑器。请将以下 git 变更日志改写为面向普通用户的中文更新说明。
