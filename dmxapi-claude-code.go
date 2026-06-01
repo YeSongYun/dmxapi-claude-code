@@ -113,7 +113,7 @@ var allEnvVarKeys = []string{
 
 // 版本号 / 盒子宽度保持 const（运行时不会变）
 const (
-	appVersion = "1.7.3"
+	appVersion = "1.7.4"
 	boxWidth   = 60
 )
 
@@ -147,9 +147,12 @@ var (
 	iconWarn    = "⚠"
 	iconInfo    = "→"
 	iconTip     = "◆"
-	iconPrompt  = "❯"
-	iconCheck   = "✓"
-	iconEdit    = "✏"
+	// 以下 3 个图标出现在对齐盒子内，必须用宽度恒为 1 列的 ASCII：
+	// ❯ ✓ ✏ 等是 East Asian Ambiguous 字符，终端实际渲染宽度随字体而变，
+	// 会与 visibleLength 的计算不一致导致右边框错位（见 isAmbiguousWidth 说明）。
+	iconPrompt  = ">"
+	iconCheck   = "*"
+	iconEdit    = "+"
 	iconNavUp   = "↑"
 	iconNavDown = "↓"
 

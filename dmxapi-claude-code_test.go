@@ -1512,7 +1512,7 @@ func TestFitWidth(t *testing.T) {
 }
 
 // TestRenderItemMenuAlignment 校验 renderItemMenu 渲染的每一行（含超长项、各选中态、
-// CJK / 非 CJK 两种 iconPrompt 宽度）右边框 │ 始终对齐到同一列。
+// CJK / 非 CJK 两种 locale）右边框 │ 始终对齐到同一列。
 func TestRenderItemMenuAlignment(t *testing.T) {
 	orig := cjkAmbiguous
 	t.Cleanup(func() { cjkAmbiguous = orig })
@@ -1528,7 +1528,8 @@ func TestRenderItemMenuAlignment(t *testing.T) {
 		"请选择配置方式",
 		"管理配置「这是一个非常非常非常长的自定义配置名称超过六十列宽度啊啊啊啊」",
 	}
-	// 两种 locale：cjkAmbiguous=true 时 iconPrompt "❯" 宽度为 2，复现选中行 off-by-one 场景。
+	// 两种 locale 都要对齐：iconPrompt 已改为 ASCII ">"（宽度恒 1），
+	// 不再受 cjkAmbiguous 影响；保留两分支以防未来回归。
 	for _, cjk := range []bool{false, true} {
 		cjkAmbiguous = cjk
 		for _, title := range titles {
