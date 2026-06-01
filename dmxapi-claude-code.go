@@ -5116,7 +5116,8 @@ func editNamedConfig(nc NamedConfig) {
 		case 7:
 			configureAttribution(&attr)
 			fmt.Println()
-			continue // 改的是编辑态 attr，回到编辑菜单累积其他修改后再统一保存
+			// 不 continue：configureAttribution 返回即表示署名配置完毕，
+			// 落到下方保存逻辑统一持久化（attr 已是最新编辑态）。
 		}
 
 		// 构造更新后的快照：沿用原名 → 覆盖同一文件；Teams/Effort 回读已播种的当前态
