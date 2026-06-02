@@ -4,6 +4,32 @@
 
 
 
+
+## 1.7.9 (2026-06-02)
+
+### 🐛 问题修复
+
+- 补全 HOME 隔离的 Windows 分支并修正 manageNamedConfig 过时注释
+- 删除命名配置后返回主菜单列表，而非直接退出程序
+- CHANGELOG 改用「上次已写入版本..本次 tag」区间生成，避免漏版本
+
+### 📖 文档
+
+- 补全 CHANGELOG 缺失版本 v1.5.2~v1.7.6
+- Update CHANGELOG.md for v1.7.8
+
+### 🔨 杂项
+
+- 发布 v1.7.9
+
+### 🚀 新功能
+
+- 新增配置流程自动启用思考等级 ultracode
+
+### 🧪 测试
+
+- 隔离 TestBuildVSCodeEnvVars 的 HOME，避免读到开发机 settings.json
+
 ## 1.7.8 (2026-06-01)
 
 ### 📖 文档
