@@ -1375,7 +1375,7 @@ func TestNamedConfigRoundTrip(t *testing.T) {
 		},
 		Name:        "我的配置",
 		AgentTeams:  "1",
-		EffortLevel: "ultracode",
+		EffortLevel: "xhigh",
 		SavedAt:     "2026-05-29T10:00:00Z",
 		AppVersion:  "1.6.5",
 	}
@@ -2080,5 +2080,332 @@ func TestDmxapiDefaultAttribution_EndToEnd(t *testing.T) {
 	// env 受管键也应写入，permissions 保留
 	if loadConfigFromClaudeSettings().BaseURL != "https://www.dmxapi.cn" {
 		t.Error("env BaseURL 未写入")
+	}
+}
+
+// ── Effort Level 顶层 effortLevel 同步与归一 ─────────────────────────────────
+
+func TestNormalizeEffortLevel(t *testing.T) {
+	cases := map[string]string{
+		"ultracode": "xhigh", // 历史非法值归一
+		"low":       "low",
+		"medium":    "medium",
+		"high":      "high",
+		"xhigh":     "xhigh",
+		"max":       "max", // env 合法、顶层不接受，但归一阶段不动它
+		"auto":      "auto",
+		"":          "",
+	}
+	for in, want := range cases {
+		if got := normalizeEffortLevel(in); got != want {
+			t.Errorf("normalizeEffortLevel(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestMergeClaudeEffortLevel(t *testing.T) {
+	base := []byte(`{"model":"sonnet"}`)
+
+	// 每个用例用独立 map：json.Unmarshal 对复用 map 是合并语义，不会清除上一轮的键。
+	hasTop := func(b []byte) (string, bool) {
+		var m map[string]interface{}
+		if err := json.Unmarshal(b, &m); err != nil {
+			t.Fatal(err)
+		}
+		v, ok := m["effortLevel"]
+		s, _ := v.(string)
+		return s, ok
+	}
+
+	// 合法值 → 写顶层
+	out, err := mergeClaudeEffortLevel(base, "xhigh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := hasTop(out); v != "xhigh" {
+		t.Errorf("xhigh 应写入顶层 effortLevel，得 %v", v)
+	}
+
+	// 入参 ultracode → 归一为 xhigh 写入
+	out, _ = mergeClaudeEffortLevel(base, "ultracode")
+	if v, _ := hasTop(out); v != "xhigh" {
+		t.Errorf("ultracode 应归一为 xhigh，得 %v", v)
+	}
+
+	// 空 → 删除顶层
+	withTop := []byte(`{"model":"sonnet","effortLevel":"high"}`)
+	out, _ = mergeClaudeEffortLevel(withTop, "")
+	if _, ok := hasTop(out); ok {
+		t.Error("空值应删除顶层 effortLevel，仍存在")
+	}
+
+	// max（顶层不接受）→ 不动现有值
+	out, _ = mergeClaudeEffortLevel(withTop, "max")
+	if v, _ := hasTop(out); v != "high" {
+		t.Errorf("max 应保持顶层原值 high 不动，得 %v", v)
+	}
+}
+
+func TestLoadConfigFromClaudeSettings_TopLevelEffort(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", home)
+	}
+	sp := claudeSettingsPathFor(home)
+	if err := os.MkdirAll(filepath.Dir(sp), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// 有 env 块 + 顶层 effortLevel
+	if err := os.WriteFile(sp, []byte(`{"effortLevel":"xhigh","env":{"CLAUDE_CODE_EFFORT_LEVEL":"high"}}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	loaded := loadConfigFromClaudeSettings()
+	if loaded.EffortLevel != "high" {
+		t.Errorf("env 块 EffortLevel = %q, want high", loaded.EffortLevel)
+	}
+	if loaded.TopLevelEffortLevel != "xhigh" {
+		t.Errorf("TopLevelEffortLevel = %q, want xhigh", loaded.TopLevelEffortLevel)
+	}
+
+	// 无 env 块、仅顶层 → 仍能读出顶层（early-return 移出验证）
+	if err := os.WriteFile(sp, []byte(`{"effortLevel":"xhigh"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	loaded = loadConfigFromClaudeSettings()
+	if loaded.TopLevelEffortLevel != "xhigh" {
+		t.Errorf("无 env 块时 TopLevelEffortLevel = %q, want xhigh", loaded.TopLevelEffortLevel)
+	}
+}
+
+func TestGetManagedEffortLevelValue_FallbackAndNormalize(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", home)
+	}
+	sp := claudeSettingsPathFor(home)
+	if err := os.MkdirAll(filepath.Dir(sp), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// 系统 env 优先，且归一 ultracode→xhigh
+	t.Setenv(envEffortLevel, "ultracode")
+	if got := getManagedEffortLevelValue(); got != "xhigh" {
+		t.Errorf("系统 env=ultracode 应归一为 xhigh，得 %q", got)
+	}
+
+	// env 空 → 回退 env 块
+	t.Setenv(envEffortLevel, "")
+	if err := os.WriteFile(sp, []byte(`{"env":{"CLAUDE_CODE_EFFORT_LEVEL":"high"}}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if got := getManagedEffortLevelValue(); got != "high" {
+		t.Errorf("应回退 env 块 high，得 %q", got)
+	}
+
+	// env 空、env 块无 → 回退顶层 effortLevel
+	if err := os.WriteFile(sp, []byte(`{"effortLevel":"xhigh"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if got := getManagedEffortLevelValue(); got != "xhigh" {
+		t.Errorf("应回退顶层 effortLevel xhigh，得 %q", got)
+	}
+}
+
+func TestSaveClaudeSettings_TopAndEnvEffortConsistent(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", home)
+	}
+	t.Setenv(envAgentTeams, "")
+	t.Setenv(envEffortLevel, "xhigh")
+
+	sp := claudeSettingsPathFor(home)
+	if err := os.MkdirAll(filepath.Dir(sp), 0755); err != nil {
+		t.Fatal(err)
+	}
+	// 预置一个含旧顶层 high 的文件，验证写入后被同步为 xhigh
+	if err := os.WriteFile(sp, []byte(`{"effortLevel":"high","model":"sonnet"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := Config{BaseURL: "https://x", AuthToken: "sk-1", Model: "m"}
+	if err := saveClaudeSettingsConfigWithAgentTeams(cfg, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, _ := os.ReadFile(sp)
+	var m map[string]interface{}
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatal(err)
+	}
+	if m["effortLevel"] != "xhigh" {
+		t.Errorf("顶层 effortLevel = %v, want xhigh", m["effortLevel"])
+	}
+	envMap, _ := m["env"].(map[string]interface{})
+	if envMap["CLAUDE_CODE_EFFORT_LEVEL"] != "xhigh" {
+		t.Errorf("env 块 effort = %v, want xhigh", envMap["CLAUDE_CODE_EFFORT_LEVEL"])
+	}
+	if m["model"] != "sonnet" {
+		t.Errorf("无关键 model 应保留，得 %v", m["model"])
+	}
+}
+
+// TestSaveClaudeSettings_MigratesLegacyUltracode 精确复现用户报告的真实文件状态：
+// env 块写着历史非法值 ultracode、顶层残留旧 high、系统 env 也是 ultracode。
+// 走一次保存后，env 块与顶层应同时归一为 xhigh，消除“两处不一致”。
+func TestSaveClaudeSettings_MigratesLegacyUltracode(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", home)
+	}
+	t.Setenv(envAgentTeams, "")
+	t.Setenv(envEffortLevel, "ultracode") // 系统 env 残留非法值
+
+	sp := claudeSettingsPathFor(home)
+	if err := os.MkdirAll(filepath.Dir(sp), 0755); err != nil {
+		t.Fatal(err)
+	}
+	// 复现：env 块 ultracode + 顶层 high（两处不一致）
+	preset := `{"effortLevel":"high","env":{"CLAUDE_CODE_EFFORT_LEVEL":"ultracode"}}`
+	if err := os.WriteFile(sp, []byte(preset), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := Config{BaseURL: "https://x", AuthToken: "sk-1", Model: "m"}
+	if err := saveClaudeSettingsConfigWithAgentTeams(cfg, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, _ := os.ReadFile(sp)
+	var m map[string]interface{}
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatal(err)
+	}
+	env, _ := m["env"].(map[string]interface{})
+	if m["effortLevel"] != "xhigh" || env["CLAUDE_CODE_EFFORT_LEVEL"] != "xhigh" {
+		t.Errorf("迁移后两处应均为 xhigh，得 顶层=%v env=%v", m["effortLevel"], env["CLAUDE_CODE_EFFORT_LEVEL"])
+	}
+}
+
+func TestClearEffortFromClaudeSettings_Combinations(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", home)
+	}
+	t.Setenv(envEffortLevel, "")
+	sp := claudeSettingsPathFor(home)
+	if err := os.MkdirAll(filepath.Dir(sp), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	readTop := func() (map[string]interface{}, map[string]interface{}) {
+		raw, _ := os.ReadFile(sp)
+		var m map[string]interface{}
+		_ = json.Unmarshal(raw, &m)
+		env, _ := m["env"].(map[string]interface{})
+		return m, env
+	}
+
+	// env 有 + 顶层有 → 两处都删
+	_ = os.WriteFile(sp, []byte(`{"effortLevel":"xhigh","env":{"CLAUDE_CODE_EFFORT_LEVEL":"xhigh","OTHER":"keep"}}`), 0644)
+	if err := clearEffortFromClaudeSettings(); err != nil {
+		t.Fatal(err)
+	}
+	m, env := readTop()
+	if _, ok := m["effortLevel"]; ok {
+		t.Error("env有+顶层有：顶层 effortLevel 应删除")
+	}
+	if _, ok := env["CLAUDE_CODE_EFFORT_LEVEL"]; ok {
+		t.Error("env有+顶层有：env effort 应删除")
+	}
+	if env["OTHER"] != "keep" {
+		t.Error("env有+顶层有：其他 env 键应保留")
+	}
+
+	// env 无 + 顶层有 → 必须删顶层
+	_ = os.WriteFile(sp, []byte(`{"effortLevel":"xhigh","model":"sonnet"}`), 0644)
+	if err := clearEffortFromClaudeSettings(); err != nil {
+		t.Fatal(err)
+	}
+	m, _ = readTop()
+	if _, ok := m["effortLevel"]; ok {
+		t.Error("env无+顶层有：顶层 effortLevel 必须删除")
+	}
+	if m["model"] != "sonnet" {
+		t.Error("env无+顶层有：无关键应保留")
+	}
+
+	// env 无 + 顶层无 → 幂等不改文件
+	content := []byte(`{"model":"sonnet"}` + "\n")
+	_ = os.WriteFile(sp, content, 0644)
+	if err := clearEffortFromClaudeSettings(); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(sp)
+	if !bytes.Equal(raw, content) {
+		t.Errorf("env无+顶层无：文件应原样不动\n得 %q\n原 %q", raw, content)
+	}
+}
+
+func TestClearClaudeSettingsManagedKeys_DropsTopEffortOnEnvHit(t *testing.T) {
+	// envHit：本工具配过 env → 连顶层 effortLevel 一起清
+	withEnv := []byte(`{"effortLevel":"xhigh","env":{"ANTHROPIC_BASE_URL":"https://x","CLAUDE_CODE_EFFORT_LEVEL":"xhigh"}}`)
+	out, removed, err := clearClaudeSettingsManagedKeys(withEnv)
+	if err != nil || !removed {
+		t.Fatalf("envHit 应判定有受管键，err=%v removed=%v", err, removed)
+	}
+	var m map[string]interface{}
+	_ = json.Unmarshal(out, &m)
+	if _, ok := m["effortLevel"]; ok {
+		t.Error("envHit：顶层 effortLevel 应连带清除")
+	}
+
+	// 仅顶层 effortLevel、无 env 受管键 → 不命中、不删（视为用户 /effort 自设）
+	onlyTop := []byte(`{"effortLevel":"xhigh"}`)
+	_, removed, _ = clearClaudeSettingsManagedKeys(onlyTop)
+	if removed {
+		t.Error("仅顶层 effortLevel 不应被判为受管配置（避免误删用户自设）")
+	}
+}
+
+func TestApplyNamedConfig_LegacyUltracodeNormalized(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", home)
+	}
+	t.Setenv(envAgentTeams, "")
+	t.Setenv(envEffortLevel, "")
+	// 隔离系统环境变量写入路径（避免污染开发机 shell profile）
+	t.Setenv("SHELL", "/bin/bash")
+
+	nc := NamedConfig{
+		Config:      Config{BaseURL: "https://www.dmxapi.cn", AuthToken: "sk-1", Model: "m"},
+		Name:        "legacy",
+		EffortLevel: "ultracode", // 老快照里的历史非法值
+	}
+	if err := applyNamedConfig(nc); err != nil {
+		t.Fatalf("applyNamedConfig() error = %v", err)
+	}
+
+	// 进程 env 应被归一为 xhigh（不是 ultracode）
+	if got := os.Getenv(envEffortLevel); got != "xhigh" {
+		t.Errorf("进程 env effort = %q, want xhigh（归一）", got)
+	}
+	// settings.json 顶层与 env 块都应是 xhigh
+	raw, _ := os.ReadFile(claudeSettingsPathFor(home))
+	var m map[string]interface{}
+	_ = json.Unmarshal(raw, &m)
+	if m["effortLevel"] != "xhigh" {
+		t.Errorf("顶层 effortLevel = %v, want xhigh", m["effortLevel"])
+	}
+	if env, _ := m["env"].(map[string]interface{}); env["CLAUDE_CODE_EFFORT_LEVEL"] != "xhigh" {
+		t.Errorf("env 块 effort = %v, want xhigh", env["CLAUDE_CODE_EFFORT_LEVEL"])
 	}
 }
