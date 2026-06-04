@@ -1375,7 +1375,7 @@ func TestNamedConfigRoundTrip(t *testing.T) {
 		},
 		Name:        "我的配置",
 		AgentTeams:  "1",
-		EffortLevel: "xhigh",
+		EffortLevel: "max",
 		SavedAt:     "2026-05-29T10:00:00Z",
 		AppVersion:  "1.6.5",
 	}
@@ -2139,10 +2139,10 @@ func TestMergeClaudeEffortLevel(t *testing.T) {
 		t.Error("空值应删除顶层 effortLevel，仍存在")
 	}
 
-	// max（顶层不接受）→ 不动现有值
+	// max（已加入 validTopEffortLevels）→ 覆盖现有值写入顶层
 	out, _ = mergeClaudeEffortLevel(withTop, "max")
-	if v, _ := hasTop(out); v != "high" {
-		t.Errorf("max 应保持顶层原值 high 不动，得 %v", v)
+	if v, _ := hasTop(out); v != "max" {
+		t.Errorf("max 应写入顶层 effortLevel，得 %v", v)
 	}
 }
 

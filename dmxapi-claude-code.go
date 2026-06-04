@@ -45,10 +45,11 @@ const (
 	envAgentTeams               = "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"
 	envEffortLevel              = "CLAUDE_CODE_EFFORT_LEVEL"
 	// defaultEffortLevel 启用 Effort Level 时写入的默认值。
-	// 取 xhigh：Claude Code 中 ultracode/max 是 session 级、无法持久化到配置文件，
-	// 环境变量 CLAUDE_CODE_EFFORT_LEVEL 与顶层 effortLevel 字段都不接受 ultracode；
-	// xhigh 是唯一可持久化的最高推理深度（即 ultracode 推理深度那一半）。
-	defaultEffortLevel = "xhigh"
+	// 取 max：按用户明确要求，三处（系统环境变量 CLAUDE_CODE_EFFORT_LEVEL、settings.json env 块、
+	// settings.json 顶层 effortLevel）统一强制写入 max。
+	// 注意：max 在 Claude Code 中通常被视为 session 级——顶层 effortLevel 官方仅接受
+	// low/medium/high/xhigh，故顶层写入的 max 可能被官方忽略；此为用户知悉风险后的明确选择。
+	defaultEffortLevel = "max"
 
 	// VSCode settings.json 中写入配置所用的键名（claudeCode 为扩展 package.json 中定义的配置前缀）
 	vscodeEnvKey = "claudeCode.environmentVariables"
@@ -132,14 +133,16 @@ var attributionManagedKeys = []string{
 	attributionPRKey,
 }
 
-// validTopEffortLevels 是 Claude Code settings.json 顶层 effortLevel 字段接受的合法值。
-// 官方仅接受 low/medium/high/xhigh（max/ultracode 是 session 级，不可写入设置文件）。
-// 用于决定是否把 effort 值镜像到顶层字段。
+// validTopEffortLevels 决定哪些 effort 值会被本工具镜像写入 settings.json 顶层 effortLevel 字段。
+// 官方实际仅接受 low/medium/high/xhigh；max 是 session 级、顶层官方不接受、可能被 Claude Code 忽略，
+// 但本工具按用户明确要求强制把 max 一并写入顶层（与 env 块、系统环境变量三处保持同值）。
+// 用于 mergeClaudeEffortLevel 判定是否写顶层。
 var validTopEffortLevels = map[string]bool{
 	"low":    true,
 	"medium": true,
 	"high":   true,
 	"xhigh":  true,
+	"max":    true, // 非官方：按用户要求强制把 max 也写入顶层 effortLevel
 }
 
 // 版本号 / 盒子宽度保持 const（运行时不会变）
@@ -305,7 +308,7 @@ type NamedConfig struct {
 	Config
 	Name        string       `json:"name"`
 	AgentTeams  string       `json:"agentTeams,omitempty"`  // 快照时的开关值（"1" 或 ""）
-	EffortLevel string       `json:"effortLevel,omitempty"` // 如 "xhigh" 或 ""
+	EffortLevel string       `json:"effortLevel,omitempty"` // 如 "max" 或 ""
 	Attribution *Attribution `json:"attribution,omitempty"` // nil=该配置不管理 git 署名
 	SavedAt     string       `json:"savedAt,omitempty"`     // RFC3339
 	AppVersion  string       `json:"appVersion,omitempty"`  // 写入时的 appVersion
@@ -1983,9 +1986,9 @@ func saveClaudeSettingsConfigWithAgentTeams(cfg Config, agentTeamsVal string) er
 
 // mergeClaudeEffortLevel 在已是标准 JSON（非 JSONC）的 settings 字节流上同步顶层 effortLevel 字段，
 // 使其与 env 块的 CLAUDE_CODE_EFFORT_LEVEL 保持同值。入参先经 normalizeEffortLevel 归一：
-//   - 归一后 ∈ validTopEffortLevels（low/medium/high/xhigh）→ 写入顶层 effortLevel
+//   - 归一后 ∈ validTopEffortLevels（low/medium/high/xhigh/max）→ 写入顶层 effortLevel
 //   - 归一后为空 → 删除顶层 effortLevel
-//   - 其他（如 max，顶层不接受但 env 合法）→ 保守不动，避免误删用户值
+//   - 其他（如 auto，顶层不接受但 env 合法）→ 保守不动，避免误删用户值
 //
 // 本函数经 MarshalIndent 重排，不保留注释，与 mergeClaudeSettings/mergeClaudeAttribution 路径一致。
 func mergeClaudeEffortLevel(jsonBytes []byte, effort string) ([]byte, error) {
@@ -2004,7 +2007,7 @@ func mergeClaudeEffortLevel(jsonBytes []byte, effort string) ([]byte, error) {
 	case normalized == "":
 		delete(settings, claudeSettingsEffortLevelKey)
 	default:
-		// max/auto 等顶层不接受的值：不改动顶层字段（既不写也不删）
+		// auto 等顶层不接受的值：不改动顶层字段（既不写也不删）
 	}
 
 	return json.MarshalIndent(settings, "", "  ")
@@ -4114,7 +4117,7 @@ func runRecommendedConfig() (back bool) {
 	printInfo(fmt.Sprintf("Sonnet 模型:      %s", recommendedSonnetModel))
 	printInfo(fmt.Sprintf("Opus 模型:        %s", recommendedOpusModel))
 	printInfo(fmt.Sprintf("Effort Level:     %s (%s=%s)", defaultEffortLevel, envEffortLevel, defaultEffortLevel))
-	printInfo("将自动禁用实验性请求头、设置 xhigh 最高可持久化推理深度，并配置 VSCode 插件")
+	printInfo("将自动禁用实验性请求头、设置 max 最高推理深度，并配置 VSCode 插件")
 	fmt.Println()
 
 	existing := loadExistingConfig()
@@ -4302,7 +4305,7 @@ func configureAgentTeams(exitOnDone, allowBack bool) (back bool) {
 // 嵌入后置步骤时传 false，由 main 统一处理退出。
 // allowBack=true 时，启用/禁用选择按 ESC 返回上一步（back=true，在任何写入副作用之前）。
 func configureEffortLevel(exitOnDone, allowBack bool) (back bool) {
-	printSectionHeader("配置 Effort Level（xhigh 最高可持久化推理深度）")
+	printSectionHeader("配置 Effort Level（max 最高推理深度）")
 	fmt.Println()
 
 	currentVal := getManagedEffortLevelValue()
@@ -4312,13 +4315,13 @@ func configureEffortLevel(exitOnDone, allowBack bool) (back bool) {
 		printInfo(fmt.Sprintf("当前状态: %s未设置%s", colorRed, colorReset))
 	}
 	fmt.Println()
-	fmt.Printf("  CLAUDE_CODE_EFFORT_LEVEL=xhigh 可让 Claude Code 使用最高可持久化推理深度，\n")
+	fmt.Printf("  CLAUDE_CODE_EFFORT_LEVEL=max 可让 Claude Code 使用最高推理深度，\n")
 	fmt.Printf("  获得更深入的分析和更高质量的代码输出。\n")
 	fmt.Println()
 	fmt.Printf("  关闭后将移除 CLAUDE_CODE_EFFORT_LEVEL 环境变量。\n")
 	fmt.Println()
 
-	enable, b := runEnableDisableMenu("是否启用 Effort Level=xhigh", allowBack)
+	enable, b := runEnableDisableMenu("是否启用 Effort Level=max", allowBack)
 	if allowBack && b {
 		return true // 返回上一步（尚未产生任何写入副作用）
 	}
@@ -5045,7 +5048,7 @@ func runFromScratchConfig(name string) (back bool) {
 			attr = Attribution{Commit: &c, PR: &p}
 			step = sSave
 		case sSave:
-			// 自动为新增配置启用思考等级（xhigh），与推荐配置流程保持一致。
+			// 自动为新增配置启用思考等级（max），与推荐配置流程保持一致。
 			// 提前注入进程环境变量，saveConfig 内 buildManagedEnvMap 会读取并写入所有目标位置，
 			// 后续命名配置快照 EffortLevel 也会读到该值。
 			os.Setenv(envEffortLevel, defaultEffortLevel)
@@ -5215,7 +5218,7 @@ func editNamedConfig(nc NamedConfig) {
 			{"1", "修改 URL/Token", "重新配置 URL、Token 和模型"},
 			{"2", "仅配置模型", "只修改默认/各档位模型"},
 			{"3", "解决 400 报错", "禁用实验性请求头"},
-			{"4", "配置 Effort Level", "设置 xhigh 最高可持久化思考等级"},
+			{"4", "配置 Effort Level", "设置 max 最高思考等级"},
 			{"5", "配置实验性功能", "启用/禁用 Agent Teams"},
 			{"6", "配置 VSCode 插件", "写入 VSCode settings.json"},
 			{"7", "配置 Git 署名", "自定义/关闭 commit 与 PR 署名"},
