@@ -7,6 +7,23 @@
 
 
 
+
+## 1.8.2 (2026-06-05)
+
+### 📖 文档
+
+- Update CHANGELOG.md for v1.8.1
+- Update CHANGELOG.md for v1.8.0
+
+### 🔨 杂项
+
+- Bump version 1.8.1 → 1.8.2
+- Bump version 1.8.0 → 1.8.1
+
+### 🚀 新功能
+
+- 思考等级启用值改为 max 并三处同步写入
+
 ## 1.8.1 (2026-06-04)
 
 ### 🔨 杂项
