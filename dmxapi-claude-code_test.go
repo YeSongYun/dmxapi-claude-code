@@ -607,6 +607,34 @@ func TestMergeClaudeSettings(t *testing.T) {
 			t.Error("expected error when env is not an object")
 		}
 	})
+
+	t.Run("清除历史错误写入的 _NAME 键", func(t *testing.T) {
+		existing := []byte(`{
+			"env": {
+				"FOO": "bar",
+				"ANTHROPIC_DEFAULT_SONNET_MODEL_NAME": "claude-opus-4-8-cc",
+				"ANTHROPIC_DEFAULT_OPUS_MODEL_NAME": "claude-opus-4-8-cc",
+				"ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME": "claude-opus-4-8-cc"
+			}
+		}`)
+		out, err := mergeClaudeSettings(existing, managed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var result map[string]interface{}
+		if err := json.Unmarshal(out, &result); err != nil {
+			t.Fatal(err)
+		}
+		env := result[claudeSettingsEnvKey].(map[string]interface{})
+		for _, k := range legacyInvalidEnvKeys {
+			if _, ok := env[k]; ok {
+				t.Errorf("错误键 %s 应被删除，但仍存在", k)
+			}
+		}
+		if env["FOO"] != "bar" {
+			t.Error("非受管 env 键应保留")
+		}
+	})
 }
 
 func TestClearClaudeSettingsManagedKeys(t *testing.T) {

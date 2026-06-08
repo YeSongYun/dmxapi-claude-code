@@ -127,6 +127,16 @@ var allEnvVarKeys = []string{
 	envEffortLevel,
 }
 
+// legacyInvalidEnvKeys 历史上被错误写入 settings.json 的非法环境变量名。
+// 正确键为无 _NAME 后缀版本（envSonnetModel/envOpusModel/envHaikuModel），
+// 这些 _NAME 键本工具从不写入，每次配置写入时顺手删除。
+// 不并入 allEnvVarKeys，以免影响 clearClaudeSettingsManagedKeys 的受管键命中（envHit）判断。
+var legacyInvalidEnvKeys = []string{
+	"ANTHROPIC_DEFAULT_SONNET_MODEL_NAME",
+	"ANTHROPIC_DEFAULT_OPUS_MODEL_NAME",
+	"ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME",
+}
+
 // attributionManagedKeys 本工具管理的 attribution 子键名，清除时使用（不动用户自填的其他子键）
 var attributionManagedKeys = []string{
 	attributionCommitKey,
@@ -1850,6 +1860,10 @@ func mergeClaudeSettings(existingJSON []byte, managedEnv map[string]string) ([]b
 	}
 
 	for _, key := range allEnvVarKeys {
+		delete(envMap, key)
+	}
+	// 顺手清除历史错误写入的非法键（正确键无 _NAME 后缀，本工具从不写入）
+	for _, key := range legacyInvalidEnvKeys {
 		delete(envMap, key)
 	}
 	for key, value := range managedEnv {
