@@ -1,7 +1,7 @@
 #!/bin/sh
 set -e
 
-VERSION="v1.8.2"
+VERSION="v1.8.3"
 
 # 检测操作系统
 OS=$(uname -s)
