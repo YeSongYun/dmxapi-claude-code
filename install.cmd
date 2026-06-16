@@ -1,7 +1,7 @@
 @echo off
 setlocal
 
-set VERSION=v1.8.3
+set VERSION=v1.8.4
 
 rem Detect architecture
 set ARCH=%PROCESSOR_ARCHITECTURE%
