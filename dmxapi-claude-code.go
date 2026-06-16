@@ -2640,15 +2640,34 @@ func clearFishUniversalVariables() clearResult {
 	return clearResult{Location: "Fish universal 变量", Status: "success", Message: fmt.Sprintf("已 erase %d 个 universal 变量", removed)}
 }
 
-// clearAllConfig 清除所有配置。
-// 显示摘要 → 二次确认 → 逐位置清除 → 显示报告。
+// clearAllConfig 清除所有配置（含已保存的命名配置文件，由调用方负责删除文件）。
 // 返回 true 表示用户确认并执行了清除；false 表示用户取消。
 func clearAllConfig() bool {
-	printSectionHeader("清除所有配置")
+	return clearActiveConfig(false)
+}
+
+// clearActiveConfig 清除当前生效的 dmxapi 配置：环境变量 / shell 配置 / 注册表 /
+// Claude settings.json / VSCode / 当前进程。它从不删除已保存的命名配置文件——
+// keepNamed 只影响提示文案：
+//   - keepNamed=false（清除所有）：作为"清除所有配置"的底层逻辑，调用方随后另行删除命名配置文件；
+//   - keepNamed=true（清除当前）：用于登录订阅账号等场景，清掉当前生效配置但保留已保存配置，
+//     用户可在主菜单重新选择应用。
+// 显示摘要 → 二次确认 → 逐位置清除 → 显示报告。
+// 返回 true 表示用户确认并执行了清除；false 表示用户取消。
+func clearActiveConfig(keepNamed bool) bool {
+	title := "清除所有配置"
+	if keepNamed {
+		title = "清除当前配置"
+	}
+	printSectionHeader(title)
 	fmt.Println()
 
 	// 显示清除摘要
-	printInfo("将从以下位置清除所有 dmxapi 相关配置：")
+	if keepNamed {
+		printInfo("将清除当前生效的 dmxapi 配置（已保存的命名配置会保留）：")
+	} else {
+		printInfo("将从以下位置清除所有 dmxapi 相关配置：")
+	}
 	fmt.Println()
 	switch runtime.GOOS {
 	case "windows":
@@ -2665,8 +2684,10 @@ func clearAllConfig() bool {
 	if path, err := getClaudeSettingsPath(); err == nil {
 		fmt.Printf("    • Claude Code settings.json (%s)\n", path)
 	}
-	if dir, err := dmxapiConfigDir(); err == nil {
-		fmt.Printf("    • 已保存的命名配置 (%s)\n", dir)
+	if !keepNamed {
+		if dir, err := dmxapiConfigDir(); err == nil {
+			fmt.Printf("    • 已保存的命名配置 (%s)\n", dir)
+		}
 	}
 	fmt.Println("    • 当前进程环境变量")
 	fmt.Println()
@@ -2676,10 +2697,18 @@ func clearAllConfig() bool {
 	}
 	fmt.Println()
 
-	printWarning("此操作不可撤销，Auth Token 清除后需要重新获取")
+	if keepNamed {
+		printWarning("仅清除当前生效配置，已保存的命名配置不受影响，可在主菜单重新选择应用")
+	} else {
+		printWarning("此操作不可撤销，Auth Token 清除后需要重新获取")
+	}
 	fmt.Println()
 
-	if ok, _ := styledConfirm("确定要清除所有配置吗", false); !ok {
+	confirmText := "确定要清除所有配置吗"
+	if keepNamed {
+		confirmText = "确定要清除当前配置吗"
+	}
+	if ok, _ := styledConfirm(confirmText, false); !ok {
 		fmt.Println()
 		printInfo("已取消，未做任何更改")
 		return false
@@ -2788,6 +2817,8 @@ func clearAllConfig() bool {
 	fmt.Println()
 	if persistentFailure {
 		printTip("当前会话环境变量已清除，但仍有持久化配置未清理成功，请按上方失败项继续检查")
+	} else if keepNamed {
+		printTip("当前配置已清除，可在主菜单重新选择已保存的配置，或登录订阅账号后使用")
 	} else {
 		printTip("重新打开终端后配置清除完全生效")
 	}
@@ -5354,18 +5385,23 @@ func applyNamedConfig(nc NamedConfig) error {
 	return nil
 }
 
-// runClearConfigMenu 清除配置入口菜单：清除所有 / 清除单个命名配置。
-// 返回 back=true 表示用户按 ESC 返回主菜单。
+// runClearConfigMenu 清除配置入口菜单：清除当前 / 清除所有 / 清除单个命名配置。
+// 返回 back=true 表示回到主菜单（用户 ESC 返回，或"清除当前配置"完成后重新选择配置）。
 func runClearConfigMenu() (back bool) {
 	choice, b := runItemMenu("清除配置", []MenuItem{
-		{"1", "清除所有配置", "删除全部命名配置 + 清除 Claude Code 配置"},
-		{"2", "清除用户新增配置", "选择并删除某个已保存的命名配置"},
+		{"1", "清除当前配置", "仅清除当前生效配置，保留已保存配置（用于切换/登录订阅账号）"},
+		{"2", "清除所有配置", "删除全部命名配置 + 清除 Claude Code 配置"},
+		{"3", "清除用户新增配置", "选择并删除某个已保存的命名配置"},
 	}, true)
 	if b {
 		return true // 返回主菜单
 	}
 	switch choice {
 	case 1:
+		// 清除当前生效配置但保留已保存配置；无论是否执行都回主菜单，便于重新选择应用。
+		clearActiveConfig(true)
+		return true
+	case 2:
 		if !clearAllConfig() {
 			return false // 用户在二次确认时取消，命名配置也不删除
 		}
@@ -5375,7 +5411,7 @@ func runClearConfigMenu() (back bool) {
 			fmt.Println()
 			printSuccess(fmt.Sprintf("已删除 %d 个命名配置文件", n))
 		}
-	case 2:
+	case 3:
 		runDeleteNamedConfigMenu()
 	}
 	return false
