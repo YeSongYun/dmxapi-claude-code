@@ -10,6 +10,23 @@
 
 
 
+
+## 1.8.5 (2026-06-17)
+
+### 📖 文档
+
+- Update CHANGELOG.md for v1.8.4
+- Update CHANGELOG.md for v1.8.3
+
+### 📝 其他更新
+
+- Merge remote-tracking branch 'origin/main'
+- Merge remote-tracking branch 'origin/main'
+
+### 🔨 杂项
+
+- Bump version 1.8.4 → 1.8.5
+
 ## 1.8.4 (2026-06-16)
 
 ### 🔨 杂项
