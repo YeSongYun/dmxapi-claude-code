@@ -2651,7 +2651,7 @@ func clearAllConfig() bool {
 // keepNamed 只影响提示文案：
 //   - keepNamed=false（清除所有）：作为"清除所有配置"的底层逻辑，调用方随后另行删除命名配置文件；
 //   - keepNamed=true（清除当前）：用于登录订阅账号等场景，清掉当前生效配置但保留已保存配置，
-//     用户可在主菜单重新选择应用。
+//     完成后直接退出，用户可重新运行本工具选择应用。
 // 显示摘要 → 二次确认 → 逐位置清除 → 显示报告。
 // 返回 true 表示用户确认并执行了清除；false 表示用户取消。
 func clearActiveConfig(keepNamed bool) bool {
@@ -2818,7 +2818,7 @@ func clearActiveConfig(keepNamed bool) bool {
 	if persistentFailure {
 		printTip("当前会话环境变量已清除，但仍有持久化配置未清理成功，请按上方失败项继续检查")
 	} else if keepNamed {
-		printTip("当前配置已清除，可在主菜单重新选择已保存的配置，或登录订阅账号后使用")
+		printTip("当前配置已清除，可重新运行本工具选择已保存的配置，或登录订阅账号后使用")
 	} else {
 		printTip("重新打开终端后配置清除完全生效")
 	}
@@ -5386,7 +5386,7 @@ func applyNamedConfig(nc NamedConfig) error {
 }
 
 // runClearConfigMenu 清除配置入口菜单：清除当前 / 清除所有 / 清除单个命名配置。
-// 返回 back=true 表示回到主菜单（用户 ESC 返回，或"清除当前配置"完成后重新选择配置）。
+// 返回 back=true 仅表示用户 ESC 返回主菜单；"清除当前配置"完成后返回 false 直接退出。
 func runClearConfigMenu() (back bool) {
 	choice, b := runItemMenu("清除配置", []MenuItem{
 		{"1", "清除当前配置", "仅清除当前生效配置，保留已保存配置（用于切换/登录订阅账号）"},
@@ -5398,9 +5398,9 @@ func runClearConfigMenu() (back bool) {
 	}
 	switch choice {
 	case 1:
-		// 清除当前生效配置但保留已保存配置；无论是否执行都回主菜单，便于重新选择应用。
+		// 清除当前生效配置但保留已保存配置；完成后直接退出，不再回主菜单。
 		clearActiveConfig(true)
-		return true
+		return false
 	case 2:
 		if !clearAllConfig() {
 			return false // 用户在二次确认时取消，命名配置也不删除
