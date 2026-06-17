@@ -264,6 +264,17 @@ $:
               fi
 
         # 4. 编译各平台二进制文件
+        #    注意：上一步「更新 CHANGELOG.md」把工作区切到了 origin/main，
+        #    而 appVersion 是源码里的硬编码常量（未用 ldflags 注入）。
+        #    若直接在此工作区编译，会用 main 的源码 → 产物版本号停留在旧版本。
+        #    因此必须先切回 tag 源码再编译。
+        - name: 切回 tag 源码
+          image: alpine/git
+          script:
+            - git fetch --tags --force origin
+            - git checkout -f "${CNB_BRANCH}"
+            - echo "将编译版本：" && grep 'appVersion = ' dmxapi-claude-code.go
+
         - name: 编译 Windows AMD64
           image: golang:1.21
           script:
