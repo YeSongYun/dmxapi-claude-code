@@ -1391,6 +1391,94 @@ func TestMapTopMenuIndex(t *testing.T) {
 	}
 }
 
+func TestAdjustL2Window(t *testing.T) {
+	// total=25（24 预设 + 1 自定义），windowSize=16 对应 25 行高终端
+	cases := []struct {
+		name                           string
+		idx, offset, windowSize, total int
+		want                           int
+	}{
+		// 窗口不小于总数：恒为 0
+		{"窗口装得下全部", 5, 3, 25, 25, 0},
+		{"窗口大于总数", 5, 3, 30, 25, 0},
+		// idx 在窗口内：offset 不动
+		{"窗口内不滚动", 8, 5, 16, 25, 5},
+		{"窗口首项", 5, 5, 16, 25, 5},
+		{"窗口末项", 20, 5, 16, 25, 5},
+		// 向下越界：offset = idx - windowSize + 1
+		{"向下滚动一格", 21, 5, 16, 25, 6},
+		// 向上越界：offset = idx
+		{"向上滚动", 4, 5, 16, 25, 4},
+		// wrap-around：末项跳到 0 → offset 归 0
+		{"下翻越过末项回到首项", 0, 9, 16, 25, 0},
+		// wrap-around：首项跳到 total-1 → offset clamp 到 total-windowSize
+		{"上翻越过首项跳到末项", 24, 0, 16, 25, 9},
+		// 初始居中传入的负 offset 被 clamp 到 0
+		{"负偏移钳到 0", 2, -6, 16, 25, 0},
+		// 初始居中传入的过大 offset 被 clamp 到 total-windowSize
+		{"过大偏移钳到上界", 24, 20, 16, 25, 9},
+	}
+	for _, c := range cases {
+		got := adjustL2Window(c.idx, c.offset, c.windowSize, c.total)
+		if got != c.want {
+			t.Errorf("%s: adjustL2Window(idx=%d, offset=%d, windowSize=%d, total=%d) = %d, want %d",
+				c.name, c.idx, c.offset, c.windowSize, c.total, got, c.want)
+		}
+		// 不变式：返回的窗口必须让 idx 可见且落在合法范围
+		if c.windowSize < c.total {
+			if c.idx < got || c.idx >= got+c.windowSize {
+				t.Errorf("%s: idx=%d 不在窗口 [%d, %d) 内", c.name, c.idx, got, got+c.windowSize)
+			}
+			if got < 0 || got > c.total-c.windowSize {
+				t.Errorf("%s: offset=%d 超出合法范围 [0, %d]", c.name, got, c.total-c.windowSize)
+			}
+		}
+	}
+}
+
+// TestRenderL2MenuLineCount 校验 renderL2Menu 全量/窗口两种模式下：
+// 返回的行数与实际打印行数一致（清屏/重绘数学依赖它），且盒子各行右边框对齐。
+func TestRenderL2MenuLineCount(t *testing.T) {
+	total := len(presetModels) + 1
+	cases := []struct {
+		name                string
+		selectedIdx, offset int
+		windowSize          int
+		want                int
+	}{
+		{"全量模式", 0, 0, 0, len(presetModels) + 7},
+		{"窗口尺寸不小于总数等同全量", 0, 0, total, len(presetModels) + 7},
+		{"窗口顶部", 0, 0, 16, 16 + 8},
+		{"窗口中部", 12, 5, 16, 16 + 8},
+		{"窗口底部含自定义项", total - 1, total - 16, 16, 16 + 8},
+		{"极小窗口", 2, 1, 3, 3 + 8},
+	}
+	for _, c := range cases {
+		var got int
+		out := captureStdout(t, func() {
+			got = renderL2Menu("Opus 模型", "claude-opus-4-8-cc", c.selectedIdx, c.offset, c.windowSize, 0)
+		})
+		if got != c.want {
+			t.Errorf("%s: renderL2Menu 返回 %d 行, want %d", c.name, got, c.want)
+		}
+		if printed := strings.Count(out, "\r\n"); printed != got {
+			t.Errorf("%s: 实际打印 %d 行, 返回值为 %d", c.name, printed, got)
+		}
+		widths := map[int]struct{}{}
+		for _, raw := range strings.Split(out, "\n") {
+			line := stripControl(raw)
+			if !strings.HasPrefix(line, boxV) && !strings.HasPrefix(line, boxTL) &&
+				!strings.HasPrefix(line, boxML) && !strings.HasPrefix(line, boxBL) {
+				continue // 跳过非盒子行（空行、导航提示）
+			}
+			widths[visibleLength(line)] = struct{}{}
+		}
+		if len(widths) != 1 {
+			t.Errorf("%s: 盒子各行宽度不一致: %v", c.name, widths)
+		}
+	}
+}
+
 func TestNamedConfigRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	nc := NamedConfig{

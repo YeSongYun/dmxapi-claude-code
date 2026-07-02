@@ -70,10 +70,10 @@ const (
 	attributionPRKey             = "pr"
 
 	// 默认模型值
-	defaultModel       = "claude-sonnet-4-6-cc"
+	defaultModel       = "claude-opus-4-8-cc"
 	defaultHaikuModel  = "claude-haiku-4-5-20251001-cc"
-	defaultSonnetModel = "claude-sonnet-4-6-cc"
-	defaultOpusModel   = "claude-opus-4-6-cc"
+	defaultSonnetModel = "claude-sonnet-5-cc"
+	defaultOpusModel   = "claude-opus-4-8-cc"
 	defaultFableModel  = "claude-fable-5-cc"
 
 	// dmxapi 推荐配置（一键模式使用）
@@ -3596,6 +3596,27 @@ func findPresetIndex(value string) int {
 	return -1
 }
 
+// adjustL2Window 调整 L2 菜单滚动窗口偏移：保证 idx 落在 [offset, offset+windowSize)
+// 可见区间内，并把结果 clamp 到合法范围 [0, total-windowSize]。
+// windowSize 不小于 total 时无需窗口，恒返回 0。
+func adjustL2Window(idx, offset, windowSize, total int) int {
+	if windowSize >= total {
+		return 0
+	}
+	if idx < offset {
+		offset = idx
+	} else if idx >= offset+windowSize {
+		offset = idx - windowSize + 1
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > total-windowSize {
+		offset = total - windowSize
+	}
+	return offset
+}
+
 // clearMenuLines 清除 n 行菜单内容（上移并清行）
 func clearMenuLines(n int) {
 	if n <= 0 {
@@ -3878,10 +3899,24 @@ func renderL1Menu(entries []modelTypeEntry, selectedIdx int, linesPrinted int, a
 	return len(entries) + 7
 }
 
-// renderL2Menu 渲染二级菜单，返回渲染行数（len(presetModels)+7）
-func renderL2Menu(typeName string, currentValue string, selectedIdx int, linesPrinted int) int {
+// renderL2Menu 渲染二级菜单，返回渲染行数。
+// windowSize<=0 或不小于条目总数时为全量模式（行数 = len(presetModels)+7）；
+// 否则为窗口模式：只渲染 [offset, offset+windowSize) 区间的逻辑条目（presetModels
+// 末尾追加 1 个「自定义输入」项），窗口上下各恒占 1 行滚动指示行，
+// 保证每帧行数恒定（行数 = windowSize+8），避免菜单超出终端高度后
+// \033[nA 上移被钳制、顶部框线残留在 scrollback。
+func renderL2Menu(typeName string, currentValue string, selectedIdx int, offset, windowSize, linesPrinted int) int {
 	if linesPrinted > 0 {
 		fmt.Printf("\033[%dA", linesPrinted)
+	}
+	total := len(presetModels) + 1
+	windowed := windowSize > 0 && windowSize < total
+	start, end := 0, total
+	if windowed {
+		start, end = offset, offset+windowSize
+		if end > total {
+			end = total
+		}
 	}
 	border := strings.Repeat(boxH, boxWidth)
 	fmt.Printf("%s%s%s\033[K\r\n", boxTL, border, boxTR)
@@ -3893,9 +3928,30 @@ func renderL2Menu(typeName string, currentValue string, selectedIdx int, linesPr
 		boxV, strings.Repeat(" ", lPad), styleBold+colorBrightWhite, title, colorReset, strings.Repeat(" ", rPad), boxV)
 	fmt.Printf("%s%s%s\033[K\r\n", boxML, border, boxMR)
 
-	for i, m := range presetModels {
+	if windowed {
+		renderL2IndicatorRow(start, "上方")
+	}
+
+	for li := start; li < end; li++ {
+		if li == len(presetModels) {
+			// 自定义选项（逻辑索引 len(presetModels)）
+			customText := fmt.Sprintf("%s 自定义输入...", iconEdit)
+			customPad := boxWidth - 3 - visibleLength(customText)
+			if selectedIdx == li {
+				fmt.Printf("%s %s%s%s %s%s%s%s%s\033[K\r\n",
+					boxV, colorBrightCyan+styleBold, iconPrompt, colorReset,
+					colorBrightYellow, customText, colorReset,
+					strings.Repeat(" ", customPad), boxV)
+			} else {
+				fmt.Printf("%s   %s%s%s%s%s\033[K\r\n",
+					boxV, styleDim, customText, colorReset,
+					strings.Repeat(" ", customPad), boxV)
+			}
+			continue
+		}
+		m := presetModels[li]
 		isCurrent := (m.ID == currentValue)
-		isSelected := (i == selectedIdx)
+		isSelected := (li == selectedIdx)
 		display := m.ID
 		if m.Hint != "" {
 			display = fmt.Sprintf("%s （%s）", m.ID, m.Hint)
@@ -3929,25 +3985,35 @@ func renderL2Menu(typeName string, currentValue string, selectedIdx int, linesPr
 		}
 	}
 
-	// 自定义选项（索引 len(presetModels)）
-	customText := fmt.Sprintf("%s 自定义输入...", iconEdit)
-	customPad := boxWidth - 3 - visibleLength(customText)
-	if selectedIdx == len(presetModels) {
-		fmt.Printf("%s %s%s%s %s%s%s%s%s\033[K\r\n",
-			boxV, colorBrightCyan+styleBold, iconPrompt, colorReset,
-			colorBrightYellow, customText, colorReset,
-			strings.Repeat(" ", customPad), boxV)
-	} else {
-		fmt.Printf("%s   %s%s%s%s%s\033[K\r\n",
-			boxV, styleDim, customText, colorReset,
-			strings.Repeat(" ", customPad), boxV)
+	if windowed {
+		renderL2IndicatorRow(total-end, "下方")
 	}
 
 	fmt.Printf("%s%s%s\033[K\r\n", boxBL, border, boxBR)
 	fmt.Printf("\033[K\r\n")
 	fmt.Printf("  %s%s%s 导航%s  %sEnter 确认%s  %sq/Esc 返回%s\033[K\r\n",
 		styleDim, iconNavUp, iconNavDown, colorReset, styleDim, colorReset, styleDim, colorReset)
+	if windowed {
+		return (end - start) + 8
+	}
 	return len(presetModels) + 7
+}
+
+// renderL2IndicatorRow 渲染窗口模式下的滚动指示行；n 为该方向窗口外剩余条目数，
+// n=0 时渲染空白占位行以保证每帧行数恒定。文案只用 ASCII+CJK 字符，
+// 不用 ↑↓… 等 East Asian Ambiguous 宽度字符，避免对齐随终端漂移。
+func renderL2IndicatorRow(n int, direction string) {
+	if n <= 0 {
+		fmt.Printf("%s%s%s\033[K\r\n", boxV, strings.Repeat(" ", boxWidth), boxV)
+		return
+	}
+	text := fmt.Sprintf("... %s还有 %d 项", direction, n)
+	pad := boxWidth - 3 - visibleLength(text)
+	if pad < 0 {
+		pad = 0
+	}
+	fmt.Printf("%s   %s%s%s%s%s\033[K\r\n",
+		boxV, styleDim, text, colorReset, strings.Repeat(" ", pad), boxV)
 }
 
 // runL2Menu 运行二级菜单，返回选中的模型名。
@@ -3973,16 +4039,31 @@ func runL2Menu(typeName, currentValue string, allowBack bool) (string, bool) {
 	if idx < 0 {
 		idx = 0
 	}
+	total := len(presetModels) + 1
+	// 终端可视行数装不下全量菜单（total+6 行框架 > rows-1）时启用滚动窗口，
+	// 否则超高部分会被推入 scrollback，\033[nA 上移被钳制导致顶部框线残留。
+	windowSize := 0
+	if _, rows, err := term.GetSize(int(syscall.Stdin)); err == nil && rows > 0 && total+6 > rows-1 {
+		windowSize = rows - 9 // rows-1 帧高上限 - 6 行框架 - 2 行指示行
+		if windowSize < 3 {
+			windowSize = 3 // 极小终端下限，接受溢出不再恶化
+		}
+	}
+	offset := 0
+	if windowSize > 0 {
+		// 初始窗口让当前选中项尽量居中
+		offset = adjustL2Window(idx, idx-windowSize/2, windowSize, total)
+	}
 	linesPrinted := 0
 
 	for {
-		linesPrinted = renderL2Menu(typeName, currentValue, idx, linesPrinted)
+		linesPrinted = renderL2Menu(typeName, currentValue, idx, offset, windowSize, linesPrinted)
 		key := readRawKey()
 		switch key {
 		case KeyUp:
-			idx = (idx - 1 + len(presetModels) + 1) % (len(presetModels) + 1)
+			idx = (idx - 1 + total) % total
 		case KeyDown:
-			idx = (idx + 1) % (len(presetModels) + 1)
+			idx = (idx + 1) % total
 		case KeyEnter:
 			restore()
 			clearMenuLines(linesPrinted)
@@ -4003,6 +4084,9 @@ func runL2Menu(typeName, currentValue string, allowBack bool) (string, bool) {
 			restore()
 			clearMenuLines(linesPrinted)
 			return currentValue, false // 取消修改，停留上层（back 恒 false）
+		}
+		if windowSize > 0 {
+			offset = adjustL2Window(idx, offset, windowSize, total)
 		}
 	}
 }
