@@ -41,6 +41,7 @@ const (
 	envHaikuModel               = "ANTHROPIC_DEFAULT_HAIKU_MODEL"
 	envSonnetModel              = "ANTHROPIC_DEFAULT_SONNET_MODEL"
 	envOpusModel                = "ANTHROPIC_DEFAULT_OPUS_MODEL"
+	envFableModel               = "ANTHROPIC_DEFAULT_FABLE_MODEL"
 	envDisableExperimentalBetas = "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"
 	envAgentTeams               = "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"
 	envEffortLevel              = "CLAUDE_CODE_EFFORT_LEVEL"
@@ -73,13 +74,15 @@ const (
 	defaultHaikuModel  = "claude-haiku-4-5-20251001-cc"
 	defaultSonnetModel = "claude-sonnet-4-6-cc"
 	defaultOpusModel   = "claude-opus-4-6-cc"
+	defaultFableModel  = "claude-fable-5-cc"
 
 	// dmxapi 推荐配置（一键模式使用）
 	recommendedBaseURL     = "https://www.dmxapi.cn"
 	recommendedModel       = "claude-opus-4-8-cc"
 	recommendedHaikuModel  = "claude-haiku-4-5-20251001-cc"
-	recommendedSonnetModel = "claude-sonnet-4-6-cc"
+	recommendedSonnetModel = "claude-sonnet-5-cc"
 	recommendedOpusModel   = "claude-opus-4-8-cc"
+	recommendedFableModel  = "claude-fable-5-cc"
 
 	// recommendedAttributionText 新手流程默认 git 署名（写入 settings.json 顶层 attribution）
 	recommendedAttributionText = "Generated with dmxapi"
@@ -94,6 +97,9 @@ type presetModel struct {
 }
 
 var presetModels = []presetModel{
+	{"claude-fable-5-cc", "3.4 折"},
+	{"claude-fable-5", "6.8 折"},
+	{"claude-fable-5-ssvip", ""},
 	{"claude-opus-4-8-cc", "3.4 折"},
 	{"claude-opus-4-8", "6.8 折"},
 	{"claude-opus-4-8-ssvip", ""},
@@ -103,6 +109,9 @@ var presetModels = []presetModel{
 	{"claude-haiku-4-5-20251001-cc", "3.4 折"},
 	{"claude-haiku-4-5-20251001", "6.8 折"},
 	{"claude-haiku-4-5-20251001-ssvip", ""},
+	{"claude-sonnet-5-cc", "3.4 折"},
+	{"claude-sonnet-5", "6.8 折"},
+	{"claude-sonnet-5-ssvip", ""},
 	{"claude-sonnet-4-6-cc", "3.4 折"},
 	{"claude-sonnet-4-6", "6.8 折"},
 	{"claude-sonnet-4-6-ssvip", ""},
@@ -122,6 +131,7 @@ var allEnvVarKeys = []string{
 	envHaikuModel,
 	envSonnetModel,
 	envOpusModel,
+	envFableModel,
 	envDisableExperimentalBetas,
 	envAgentTeams,
 	envEffortLevel,
@@ -301,6 +311,7 @@ type Config struct {
 	HaikuModel  string `json:"haikuModel"`
 	SonnetModel string `json:"sonnetModel"`
 	OpusModel   string `json:"opusModel"`
+	FableModel  string `json:"fableModel"`
 }
 
 // Attribution 表示 Claude Code settings.json 顶层 attribution 对象的三态配置，
@@ -1561,12 +1572,12 @@ func vscodeSettingsPathFor(goos, homeDir, appData, wslWindowsHome string) string
 	}
 }
 
-// applyModelSuffix 对 claude-opus-4-8、claude-opus-4-7 和 claude-sonnet-4-6 系列模型 ID 追加 [1m] 后缀。
+// applyModelSuffix 对 claude-opus-4-8、claude-opus-4-7、claude-sonnet-4-6、claude-sonnet-5 和 claude-fable-5 系列模型 ID 追加 [1m] 后缀。
 func applyModelSuffix(id string) string {
 	if strings.HasSuffix(id, "[1m]") {
 		return id
 	}
-	if strings.Contains(id, "claude-opus-4-8") || strings.Contains(id, "claude-opus-4-7") || strings.Contains(id, "claude-sonnet-4-6") {
+	if strings.Contains(id, "claude-opus-4-8") || strings.Contains(id, "claude-opus-4-7") || strings.Contains(id, "claude-sonnet-4-6") || strings.Contains(id, "claude-sonnet-5") || strings.Contains(id, "claude-fable-5") {
 		return id + "[1m]"
 	}
 	return id
@@ -1587,6 +1598,7 @@ func buildManagedEnvMap(cfg Config, agentTeamsVal string) map[string]string {
 		envHaikuModel:               applyModelSuffix(cfg.HaikuModel),
 		envSonnetModel:              applyModelSuffix(cfg.SonnetModel),
 		envOpusModel:                applyModelSuffix(cfg.OpusModel),
+		envFableModel:               applyModelSuffix(cfg.FableModel),
 		envDisableExperimentalBetas: fixedDisableExperimentalBetas,
 	}
 	if agentTeamsVal != "" {
@@ -1609,6 +1621,7 @@ func buildVSCodeEnvVars(cfg Config, agentTeamsVal string) []map[string]string {
 		envHaikuModel,
 		envSonnetModel,
 		envOpusModel,
+		envFableModel,
 		envDisableExperimentalBetas,
 	}
 	if agentTeamsVal != "" {
@@ -2210,6 +2223,7 @@ func loadConfigFromClaudeSettings() loadedClaudeSettings {
 		HaikuModel:  getString(envHaikuModel),
 		SonnetModel: getString(envSonnetModel),
 		OpusModel:   getString(envOpusModel),
+		FableModel:  getString(envFableModel),
 	}
 	result.AgentTeams = getString(envAgentTeams)
 	result.EffortLevel = getString(envEffortLevel)
@@ -3100,6 +3114,7 @@ func loadExistingConfig() Config {
 		HaikuModel:  getEnvVar(envHaikuModel),
 		SonnetModel: getEnvVar(envSonnetModel),
 		OpusModel:   getEnvVar(envOpusModel),
+		FableModel:  getEnvVar(envFableModel),
 	}
 
 	fallback := loadConfigFromClaudeSettings()
@@ -3120,6 +3135,9 @@ func loadExistingConfig() Config {
 	}
 	if cfg.OpusModel == "" {
 		cfg.OpusModel = fallback.OpusModel
+	}
+	if cfg.FableModel == "" {
+		cfg.FableModel = fallback.FableModel
 	}
 	return cfg
 }
@@ -3997,6 +4015,7 @@ func runL1Menu(cfg *Config, allowBack bool) bool {
 		{"Haiku 模型", &cfg.HaikuModel},
 		{"Sonnet 模型", &cfg.SonnetModel},
 		{"Opus 模型", &cfg.OpusModel},
+		{"Fable 模型", &cfg.FableModel},
 	}
 
 	restore, err := enterRawMode()
@@ -4054,6 +4073,7 @@ func configureModelsFallback(cfg *Config, allowBack bool) bool {
 	fmt.Printf("  %-35s = %s\n", envHaikuModel, cfg.HaikuModel)
 	fmt.Printf("  %-35s = %s\n", envSonnetModel, cfg.SonnetModel)
 	fmt.Printf("  %-35s = %s\n", envOpusModel, cfg.OpusModel)
+	fmt.Printf("  %-35s = %s\n", envFableModel, cfg.FableModel)
 
 	ok, back := styledConfirm("是否修改模型配置", allowBack)
 	if allowBack && back {
@@ -4083,6 +4103,11 @@ func configureModelsFallback(cfg *Config, allowBack bool) bool {
 	if input != "" {
 		cfg.OpusModel = input
 	}
+
+	input = styledInput("Fable 模型")
+	if input != "" {
+		cfg.FableModel = input
+	}
 	return false
 }
 
@@ -4100,6 +4125,9 @@ func configureModels(cfg *Config, allowBack bool) bool {
 	}
 	if cfg.OpusModel == "" {
 		cfg.OpusModel = defaultOpusModel
+	}
+	if cfg.FableModel == "" {
+		cfg.FableModel = defaultFableModel
 	}
 
 	printSectionHeader("配置模型设置")
@@ -4161,6 +4189,7 @@ func runRecommendedConfig() (back bool) {
 	printInfo(fmt.Sprintf("Haiku 模型:       %s", recommendedHaikuModel))
 	printInfo(fmt.Sprintf("Sonnet 模型:      %s", recommendedSonnetModel))
 	printInfo(fmt.Sprintf("Opus 模型:        %s", recommendedOpusModel))
+	printInfo(fmt.Sprintf("Fable 模型:       %s", recommendedFableModel))
 	printInfo(fmt.Sprintf("Effort Level:     %s (%s=%s)", defaultEffortLevel, envEffortLevel, defaultEffortLevel))
 	printInfo("将自动禁用实验性请求头、设置 max 最高推理深度，并配置 VSCode 插件")
 	fmt.Println()
@@ -4180,6 +4209,7 @@ func runRecommendedConfig() (back bool) {
 		HaikuModel:  recommendedHaikuModel,
 		SonnetModel: recommendedSonnetModel,
 		OpusModel:   recommendedOpusModel,
+		FableModel:  recommendedFableModel,
 	}
 
 	fmt.Println()
@@ -4638,6 +4668,7 @@ func printSummary(cfg Config) {
 		makeRow("Haiku Model", cfg.HaikuModel, colorCyan),
 		makeRow("Sonnet Model", cfg.SonnetModel, colorCyan),
 		makeRow("Opus Model", cfg.OpusModel, colorCyan),
+		makeRow("Fable Model", cfg.FableModel, colorCyan),
 		makeRow("Disable Betas", fixedDisableExperimentalBetas, colorMagenta),
 		makeRow("Agent Teams", agentTeamsDisplay, agentTeamsColor),
 		makeRow("Effort Level", effortLevelDisplay, effortLevelColor),

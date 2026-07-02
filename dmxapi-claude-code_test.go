@@ -414,8 +414,8 @@ func TestBuildVSCodeEnvVars(t *testing.T) {
 	}
 
 	vars := buildVSCodeEnvVars(cfg, "")
-	if len(vars) != 7 {
-		t.Fatalf("expected 7 vars, got %d", len(vars))
+	if len(vars) != 8 {
+		t.Fatalf("expected 8 vars, got %d", len(vars))
 	}
 	found := false
 	for _, v := range vars {
@@ -437,8 +437,8 @@ func TestBuildVSCodeEnvVars(t *testing.T) {
 	}
 
 	vars2 := buildVSCodeEnvVars(cfg, "1")
-	if len(vars2) != 8 {
-		t.Fatalf("expected 8 vars with agent teams, got %d", len(vars2))
+	if len(vars2) != 9 {
+		t.Fatalf("expected 9 vars with agent teams, got %d", len(vars2))
 	}
 	found = false
 	for _, v := range vars2 {
@@ -1075,6 +1075,7 @@ func TestAllEnvVarKeys_ContainsAllKnownKeys(t *testing.T) {
 		"ANTHROPIC_DEFAULT_HAIKU_MODEL",
 		"ANTHROPIC_DEFAULT_SONNET_MODEL",
 		"ANTHROPIC_DEFAULT_OPUS_MODEL",
+		"ANTHROPIC_DEFAULT_FABLE_MODEL",
 		"CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS",
 		"CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS",
 		"CLAUDE_CODE_EFFORT_LEVEL",
