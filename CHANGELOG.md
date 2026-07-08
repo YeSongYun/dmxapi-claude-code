@@ -13,6 +13,29 @@
 
 
 
+
+## 1.8.8 (2026-07-08)
+
+### 🐛 问题修复
+
+- 修复清除配置功能的10个缺陷,含菜单未清VSCode的用户反馈根因
+
+### 📖 文档
+
+- 版本号同步清单新增 README.md
+- Update CHANGELOG.md for v1.8.7
+- 更新 README 至 v1.8.7 实际功能与用法
+- Update CHANGELOG.md for v1.8.6
+
+### 📝 其他更新
+
+- Merge branch 'main' of https://cnb.cool/dmxapi/dmxapi_claude_code
+- Merge branch 'main' of https://cnb.cool/dmxapi/dmxapi_claude_code
+
+### 🔨 杂项
+
+- 发布 v1.8.8
+
 ## 1.8.7 (2026-07-02)
 
 ### 🐛 问题修复
