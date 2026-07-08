@@ -919,6 +919,25 @@ func TestStripJSONC(t *testing.T) {
 	}
 }
 
+// TestStripJSONC_PreservesStringWithBraceComma 回归测试：末尾剥离尾随逗号的逻辑此前用不区分
+// 字符串边界的正则做最后一遍处理，会把字符串内容里字面出现的 ,} / ,]（如常见的 VSCode
+// brace-glob 排除写法）当成结构性尾随逗号误删。修复后剥离逻辑本身具备字符串边界感知。
+func TestStripJSONC_PreservesStringWithBraceComma(t *testing.T) {
+	input := []byte(`{"files.exclude": {"**/*.{js,}": true}}`)
+	cleaned := stripJSONC(input)
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(cleaned, &parsed); err != nil {
+		t.Fatalf("stripJSONC 后无法解析: %v\n%s", err, cleaned)
+	}
+	excl, ok := parsed["files.exclude"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("files.exclude 类型不对: %v", parsed["files.exclude"])
+	}
+	if _, exists := excl["**/*.{js,}"]; !exists {
+		t.Errorf("字符串键 \"**/*.{js,}\" 内容被误伤，got=%v", excl)
+	}
+}
+
 func TestIsClaudeSettingsConfigured(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -1204,6 +1223,45 @@ func TestRemoveJSONCTopKeys_PreservesComments(t *testing.T) {
 	}
 }
 
+// TestRemoveJSONCTopKeys_RemovesDuplicateTopLevelKey 回归测试：外部编辑/合并冲突可能产生同名
+// 重复顶层键，Go map 天然去重只反映"存在"不反映"出现几次"；此前只删第一次出现，第二份会残留
+// 却被上层判定为"已清除"。修复后应循环删至找不到为止。
+func TestRemoveJSONCTopKeys_RemovesDuplicateTopLevelKey(t *testing.T) {
+	input := []byte(`{"a":1,"claudeCode.environmentVariables":[1],"b":2,"claudeCode.environmentVariables":[2]}`)
+	out, count := removeJSONCTopKeys(input, []string{"claudeCode.environmentVariables"})
+	if count != 2 {
+		t.Fatalf("count=%d want 2", count)
+	}
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		t.Fatalf("结果不是合法 JSON: %v\n%s", err, out)
+	}
+	if _, exists := parsed["claudeCode.environmentVariables"]; exists {
+		t.Errorf("重复顶层键应被全部删除，仍残留: %s", out)
+	}
+}
+
+// TestRemoveJSONCTopKey_LastKeyPrecededByComment 回归测试：被删的最后一个键前面紧邻的是注释而非
+// 逗号时，此前的反向空白扫描找不到逗号，会残留非法尾随逗号 + 悬挂的孤立注释，导致标准 json.Unmarshal
+// 解析失败。修复后用正向遍历中记录的 token 级逗号位置定位，不受中间注释影响。
+func TestRemoveJSONCTopKey_LastKeyPrecededByComment(t *testing.T) {
+	input := []byte("{\n  \"model\": \"sonnet\",\n  // dmxapi 配置\n  \"env\": {\n    \"a\": 1\n  }\n}")
+	out, removed := removeJSONCTopKey(input, 0, "env")
+	if !removed {
+		t.Fatal("expected removed=true")
+	}
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		t.Fatalf("结果不是合法 JSON: %v\n%s", err, out)
+	}
+	if v, ok := parsed["model"]; !ok || v != "sonnet" {
+		t.Errorf("model 应保留，got=%s", out)
+	}
+	if _, exists := parsed["env"]; exists {
+		t.Errorf("env 应被删除，got=%s", out)
+	}
+}
+
 func TestRemoveJSONCNestedKeys_PreservesComments(t *testing.T) {
 	input := []byte(`{
     // Claude Code 设置
@@ -1307,7 +1365,11 @@ func TestShellLineManagesEnvVar_Csh(t *testing.T) {
 		{"setenv ANTHROPIC_BASE_URL https://example.com", true},
 		{"setenv ANTHROPIC_BASE_URL", true},
 		{"unsetenv ANTHROPIC_BASE_URL", true},
+		{"unsetenv ANTHROPIC_BASE_URL ", true},
 		{"setenv OTHER_KEY x", false},
+		// 回归测试：unsetenv 此前缺少单词边界检查，前缀相同但实际不同名的变量会被误判为受管行
+		{"unsetenv ANTHROPIC_BASE_URL_BACKUP", false},
+		{"setenv ANTHROPIC_BASE_URL_BACKUP x", false},
 	}
 	for _, c := range cases {
 		got := shellLineManagesEnvVar(c.line, envBaseURL, false)
@@ -1923,68 +1985,6 @@ func TestLoadAttributionFromClaudeSettings(t *testing.T) {
 	})
 }
 
-func TestClearAttributionFromClaudeSettings_PreservesComments(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	if runtime.GOOS == "windows" {
-		t.Setenv("USERPROFILE", home)
-	}
-	settingsPath := claudeSettingsPathFor(home)
-	if err := os.MkdirAll(filepath.Dir(settingsPath), 0755); err != nil {
-		t.Fatal(err)
-	}
-
-	t.Run("删子键保留注释，删空后移除顶层", func(t *testing.T) {
-		content := `{
-    // 用户注释
-    "permissions": {"allow": ["Read(README.md)"]},
-    "attribution": {
-        "commit": "x",
-        "pr": "y"
-    }
-}`
-		if err := os.WriteFile(settingsPath, []byte(content), 0644); err != nil {
-			t.Fatal(err)
-		}
-		if err := clearAttributionFromClaudeSettings([]string{attributionCommitKey, attributionPRKey}); err != nil {
-			t.Fatal(err)
-		}
-		got, _ := os.ReadFile(settingsPath)
-		s := string(got)
-		if !strings.Contains(s, "// 用户注释") {
-			t.Error("注释应保留")
-		}
-		if strings.Contains(s, "attribution") {
-			t.Error("子键全删后应移除 attribution 顶层键")
-		}
-		cleaned := stripJSONC(got)
-		var parsed map[string]interface{}
-		if err := json.Unmarshal(cleaned, &parsed); err != nil {
-			t.Fatalf("结果不是合法 JSONC: %v\n%s", err, s)
-		}
-		if _, ok := parsed["permissions"]; !ok {
-			t.Error("permissions 应保留")
-		}
-	})
-
-	t.Run("只删一个子键保留另一个", func(t *testing.T) {
-		content := `{"attribution": {"commit": "x", "pr": "y"}}`
-		if err := os.WriteFile(settingsPath, []byte(content), 0644); err != nil {
-			t.Fatal(err)
-		}
-		if err := clearAttributionFromClaudeSettings([]string{attributionCommitKey}); err != nil {
-			t.Fatal(err)
-		}
-		attr := loadAttributionFromClaudeSettings()
-		if attr.Commit != nil {
-			t.Error("commit 应被删除")
-		}
-		if attr.PR == nil || *attr.PR != "y" {
-			t.Errorf("pr 应保留为 y，得 %v", attr.PR)
-		}
-	})
-}
-
 func TestClearClaudeSettingsManagedKeys_RemovesAttribution(t *testing.T) {
 	t.Run("env 与 attribution 同时清除，保留注释与非受管键", func(t *testing.T) {
 		existing := []byte(`{
@@ -2488,6 +2488,31 @@ func TestClearClaudeSettingsManagedKeys_DropsTopEffortOnEnvHit(t *testing.T) {
 	_, removed, _ = clearClaudeSettingsManagedKeys(onlyTop)
 	if removed {
 		t.Error("仅顶层 effortLevel 不应被判为受管配置（避免误删用户自设）")
+	}
+}
+
+// TestClearClaudeSettingsManagedKeys_KeepsTopEffortWhenEnvHitIsUnrelated 回归测试：envHit
+// 此前的判定粒度是"env 块里命中任意一个受管键即真"，与顶层 effortLevel 是否真的来自本工具
+// 无关。用户只用本工具配过 baseURL/authToken（env 里没有 CLAUDE_CODE_EFFORT_LEVEL），又单独
+// 用 /effort 命令设置了顶层值时，清除配置不应连带清掉这个跟本工具无关的顶层 effortLevel。
+func TestClearClaudeSettingsManagedKeys_KeepsTopEffortWhenEnvHitIsUnrelated(t *testing.T) {
+	input := []byte(`{"effortLevel":"medium","env":{"ANTHROPIC_BASE_URL":"https://x","ANTHROPIC_AUTH_TOKEN":"sk-1"}}`)
+	out, removed, err := clearClaudeSettingsManagedKeys(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !removed {
+		t.Fatal("env 里的 baseURL/authToken 命中，removed 应为 true")
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal(out, &m); err != nil {
+		t.Fatalf("结果不是合法 JSON: %v\n%s", err, out)
+	}
+	if v, ok := m["effortLevel"]; !ok || v != "medium" {
+		t.Errorf("顶层 effortLevel 与本工具受管 env 键无关，应保留用户 /effort 自设值，got=%v", m["effortLevel"])
+	}
+	if _, exists := m["env"]; exists {
+		t.Errorf("env 块应被清空后整体移除，got=%s", out)
 	}
 }
 

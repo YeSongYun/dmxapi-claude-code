@@ -837,9 +837,6 @@ func describeWindowsRegError() string {
 
 // ==================== JSONC 处理 ====================
 
-// trailingCommaRe 匹配 JSON 中 } 或 ] 前的尾随逗号
-var trailingCommaRe = regexp.MustCompile(`,(\s*[}\]])`)
-
 // stripJSONC 将 JSONC（VS Code settings.json 格式）转换为合法 JSON。
 // 支持剥离 // 单行注释、/* */ 块注释、以及尾随逗号。
 // 使用字符级状态机正确处理字符串内容（不误删字符串中的 // 或 ,）。
@@ -892,7 +889,48 @@ func stripJSONC(data []byte) []byte {
 		i++
 	}
 	// 最后剥离尾随逗号
-	return trailingCommaRe.ReplaceAll(buf.Bytes(), []byte("$1"))
+	return stripTrailingCommas(buf.Bytes())
+}
+
+// stripTrailingCommas 剥离 } 或 ] 前的尾随逗号，字符串边界感知（不误删字符串内容里字面的 ,} / ,]）。
+// 输入应已经过注释剥离（本函数不处理 // 或 /* */），字符串内容原样保留。
+func stripTrailingCommas(data []byte) []byte {
+	var buf bytes.Buffer
+	inString := false
+	i := 0
+	for i < len(data) {
+		c := data[i]
+		if inString {
+			buf.WriteByte(c)
+			if c == '\\' && i+1 < len(data) {
+				i++
+				buf.WriteByte(data[i])
+			} else if c == '"' {
+				inString = false
+			}
+			i++
+			continue
+		}
+		if c == '"' {
+			inString = true
+			buf.WriteByte(c)
+			i++
+			continue
+		}
+		if c == ',' {
+			j := i + 1
+			for j < len(data) && (data[j] == ' ' || data[j] == '\t' || data[j] == '\n' || data[j] == '\r') {
+				j++
+			}
+			if j < len(data) && (data[j] == '}' || data[j] == ']') {
+				i++
+				continue // 结构性尾随逗号：跳过，不写入 buf
+			}
+		}
+		buf.WriteByte(c)
+		i++
+	}
+	return buf.Bytes()
 }
 
 // skipJSONCWhitespace 跳过空白和 JSONC 注释，返回新的位置
@@ -1027,6 +1065,7 @@ func removeJSONCTopKey(data []byte, objStart int, keyName string) (output []byte
 		return data, false
 	}
 	i := objStart + 1
+	prevCommaPos := -1 // 上一个键值对之后的逗号位置（token 级别，天然跳过注释）；-1 表示当前键是对象内第一个键
 	for i < len(data) {
 		i = skipJSONCWhitespace(data, i)
 		if i >= len(data) || data[i] == '}' {
@@ -1055,22 +1094,13 @@ func removeJSONCTopKey(data []byte, objStart int, keyName string) (output []byte
 			if after < len(data) && data[after] == ',' {
 				// 目标键不是最后：一并吞掉尾部逗号，后续键仍有前导格式
 				delEnd = after + 1
-			} else {
-				// 目标键是最后一个：尝试吞前导逗号
-				j := keyNameStart - 1
-				for j > objStart {
-					c := data[j]
-					if c == ' ' || c == '\t' || c == '\n' || c == '\r' {
-						j--
-						continue
-					}
-					break
-				}
-				if j >= objStart && data[j] == ',' {
-					delStart = j
-				}
-				// 前面就是 '{' 的情况：保持 delStart = keyNameStart
+			} else if prevCommaPos >= 0 {
+				// 目标键是最后一个，且前面确实还有别的键：吞掉分隔它们的逗号。
+				// 用正向遍历中记录的 token 级逗号位置，而非从 keyNameStart 反向扫描空白——
+				// 这样即使逗号和本键之间隔着注释（如 `"a": 1,\n// 注释\n"b": 2`），也能正确定位。
+				delStart = prevCommaPos
 			}
+			// prevCommaPos < 0：本键是对象内唯一/第一个键，保持 delStart = keyNameStart
 			var buf bytes.Buffer
 			buf.Write(data[:delStart])
 			buf.Write(data[delEnd:])
@@ -1080,6 +1110,7 @@ func removeJSONCTopKey(data []byte, objStart int, keyName string) (output []byte
 		i = valEnd
 		i = skipJSONCWhitespace(data, i)
 		if i < len(data) && data[i] == ',' {
+			prevCommaPos = i
 			i++
 			continue
 		}
@@ -1146,16 +1177,21 @@ func findNestedObjectStart(data []byte, parentStart int, keyName string) (int, b
 }
 
 // removeJSONCTopKeys 批量删除 JSONC 文档里多个顶层键（保留注释）。返回修改后的字节流和删除计数。
+// 对每个键名循环删至找不到为止，而非只删一次——JSON 规范不禁止重复顶层键，外部编辑/合并冲突
+// 可能产生同名重复键，只删第一次出现会让后一份残留却被上层判定为"已清除"。
 func removeJSONCTopKeys(data []byte, keys []string) ([]byte, int) {
 	count := 0
 	out := data
 	for _, k := range keys {
-		start, _, ok := findTopLevelObjectRange(out)
-		if !ok {
-			break
-		}
-		newOut, removed := removeJSONCTopKey(out, start, k)
-		if removed {
+		for {
+			start, _, ok := findTopLevelObjectRange(out)
+			if !ok {
+				break
+			}
+			newOut, removed := removeJSONCTopKey(out, start, k)
+			if !removed {
+				break
+			}
 			out = newOut
 			count++
 		}
@@ -1176,17 +1212,20 @@ func removeJSONCNestedKeys(data []byte, parentKey string, childKeys []string) (o
 	}
 	out := data
 	for _, k := range childKeys {
-		// 每次删除后 offset 会变，重新定位 parent
-		topS, _, ok := findTopLevelObjectRange(out)
-		if !ok {
-			break
-		}
-		ns, nok := findNestedObjectStart(out, topS, parentKey)
-		if !nok {
-			break
-		}
-		newOut, ok := removeJSONCTopKey(out, ns, k)
-		if ok {
+		// 每次删除后 offset 会变，重新定位 parent；同名子键循环删至找不到为止（理由同 removeJSONCTopKeys）
+		for {
+			topS, _, ok := findTopLevelObjectRange(out)
+			if !ok {
+				break
+			}
+			ns, nok := findNestedObjectStart(out, topS, parentKey)
+			if !nok {
+				break
+			}
+			newOut, ok := removeJSONCTopKey(out, ns, k)
+			if !ok {
+				break
+			}
 			out = newOut
 			removed++
 		}
@@ -1906,8 +1945,11 @@ func clearClaudeSettingsManagedKeys(existingJSON []byte) ([]byte, bool, error) {
 		return nil, false, fmt.Errorf("解析 Claude settings.json 失败: %v", err)
 	}
 
-	// 检测 env 受管键命中
+	// 检测 env 受管键命中；effortEnvHit 单独细分出"env 块里是否确实写过
+	// CLAUDE_CODE_EFFORT_LEVEL"，粒度比 envHit（命中任意受管键即真）更细，
+	// 用于避免下面清顶层 effortLevel 时误伤用户独立用 /effort 命令设置的值。
 	envHit := false
+	effortEnvHit := false
 	if existingEnv, ok := settings[claudeSettingsEnvKey]; ok {
 		envMap, ok := existingEnv.(map[string]interface{})
 		if !ok {
@@ -1918,6 +1960,9 @@ func clearClaudeSettingsManagedKeys(existingJSON []byte) ([]byte, bool, error) {
 				envHit = true
 				break
 			}
+		}
+		if _, exists := envMap[envEffortLevel]; exists {
+			effortEnvHit = true
 		}
 	}
 
@@ -1947,8 +1992,12 @@ func clearClaudeSettingsManagedKeys(existingJSON []byte) ([]byte, bool, error) {
 		if envBecameEmpty {
 			output, _ = removeJSONCTopKeys(output, []string{claudeSettingsEnvKey})
 		}
-		// 顶层 effortLevel 是 env 块 CLAUDE_CODE_EFFORT_LEVEL 的持久化镜像，搭车在 envHit 下清除。
-		// 不作独立触发器：仅当本工具确实写过 env（envHit）时才清，避免误删用户用 /effort 自设的顶层值。
+	}
+	// 顶层 effortLevel 是 env 块 CLAUDE_CODE_EFFORT_LEVEL 的持久化镜像，只有 env 块里
+	// 确实写过 CLAUDE_CODE_EFFORT_LEVEL（effortEnvHit）时才连带清除。不能仅凭 envHit
+	// （命中任意一个受管键，如 baseURL/authToken）判断——否则用户只配过 baseURL、
+	// 又单独用 /effort 命令设置的顶层值会被无关地一并清除。
+	if effortEnvHit {
 		output, _ = removeJSONCTopKeys(output, []string{claudeSettingsEffortLevelKey})
 	}
 
@@ -2307,29 +2356,6 @@ func getManagedAttribution() Attribution {
 	return loadAttributionFromClaudeSettings()
 }
 
-// clearAttributionFromClaudeSettings 仅从 ~/.claude/settings.json 顶层 attribution 删除指定子键，
-// 保留其他子键、其他顶层键及 JSONC 注释/格式。子键全删后移除整个 attribution 顶层键。
-// fields 取 ["commit"] / ["pr"] / ["commit","pr"]。用于“恢复 Claude 默认署名”。
-func clearAttributionFromClaudeSettings(fields []string) error {
-	settingsPath, err := getClaudeSettingsPath()
-	if err != nil {
-		return err
-	}
-	data, err := os.ReadFile(settingsPath)
-	if err != nil {
-		return nil // 文件不存在视为已无该键，幂等成功
-	}
-	output, removed, parentEmpty := removeJSONCNestedKeys(data, claudeSettingsAttributionKey, fields)
-	if removed == 0 {
-		return nil // 本就没有相关子键，无需改写（保持幂等）
-	}
-	if parentEmpty {
-		output, _ = removeJSONCTopKeys(output, []string{claudeSettingsAttributionKey})
-	}
-	output = append(bytes.TrimRight(output, "\n"), '\n')
-	return writeFileAtomic(settingsPath, output, 0644)
-}
-
 // winPathToWSL 将 Windows 路径（如 C:\Users\alice）转换为 WSL 挂载路径（/mnt/c/Users/alice）。
 // 注意：不使用 filepath.ToSlash，因为 filepath.ToSlash 在 Linux/WSL 宿主上不转换反斜杠。
 func winPathToWSL(winPath string) string {
@@ -2515,10 +2541,14 @@ func shellLineManagesEnvVar(line, key string, isFish bool) bool {
 	}
 
 	// csh/tcsh: setenv KEY VALUE / unsetenv KEY
+	// unsetenv 分支必须像 setenv 一样要求 key 后紧跟空白/制表符/行尾，
+	// 否则 "unsetenv ANTHROPIC_BASE_URL_BACKUP" 这类前缀相同但实际不同名的行会被误判为受管行。
 	if strings.HasPrefix(trimmed, fmt.Sprintf("setenv %s ", key)) ||
 		strings.HasPrefix(trimmed, fmt.Sprintf("setenv %s\t", key)) ||
 		trimmed == fmt.Sprintf("setenv %s", key) ||
-		strings.HasPrefix(trimmed, fmt.Sprintf("unsetenv %s", key)) {
+		strings.HasPrefix(trimmed, fmt.Sprintf("unsetenv %s ", key)) ||
+		strings.HasPrefix(trimmed, fmt.Sprintf("unsetenv %s\t", key)) ||
+		trimmed == fmt.Sprintf("unsetenv %s", key) {
 		return true
 	}
 
@@ -2587,24 +2617,77 @@ func removeEnvVarsUnixFromFile(configPath string, keys []string, isFish bool) (r
 	return removedCount, nil
 }
 
-// clearWindowsRegistryFromWSL 通过 WSL interop 调用 reg.exe 清理 Windows 用户环境变量。
+// clearWindowsRegistryFromWSL 通过 WSL interop 调用 Windows 侧命令清理 Windows 用户环境变量。
 // 当在 WSL 内执行清除时，只清 Linux 侧 shell 配置会留下注册表里残留，导致 Windows 侧 cmd/VSCode 仍用旧值。
+// 优先走 powershell.exe（作为真正的 Windows 进程运行，[Environment]::SetEnvironmentVariable 会
+// 自动广播 WM_SETTINGCHANGE，同 removeUserEnv 的做法）；powershell 不可用时回退到 reg.exe DELETE，
+// 并用 reg.exe QUERY 二次读校验——reg.exe 的退出码 1 无法区分"变量本就不存在"与"删除失败（如权限拒绝）"，
+// 不能直接信任退出码。
 func clearWindowsRegistryFromWSL() clearResult {
+	if psExe, err := exec.LookPath("powershell.exe"); err == nil {
+		return clearWindowsRegistryFromWSLViaPowerShell(psExe)
+	}
 	regExe, err := exec.LookPath("reg.exe")
 	if err != nil {
-		return clearResult{Location: "WSL → Windows 注册表", Status: "skipped", Message: "reg.exe 不可用（WSL interop 未启用或非 WSL 环境）"}
+		return clearResult{Location: "WSL → Windows 注册表", Status: "skipped", Message: "powershell.exe / reg.exe 均不可用（WSL interop 未启用或非 WSL 环境）"}
 	}
+	return clearWindowsRegistryFromWSLViaReg(regExe)
+}
+
+// clearWindowsRegistryFromWSLViaPowerShell 优先路径：删除后自动广播，无需像 reg.exe 那样额外
+// 校验退出码语义。但 [Environment]::SetEnvironmentVariable(key, $null, ...) 本身是 .NET 幂等操作——
+// 变量本不存在时同样成功返回，不能仅凭 err==nil 判断"真的删除了"，否则 removed 计数会被系统性
+// 夸大、skipped 状态永远不可达。因此脚本里先用 GetEnvironmentVariable 判断删除前是否存在，
+// 只有存在过才计入 removed（同 removeAndVerifyUserEnvWithOps 对同一幂等特性的应对思路）。
+func clearWindowsRegistryFromWSLViaPowerShell(psExe string) clearResult {
 	var failures []string
 	removed := 0
 	for _, key := range allEnvVarKeys {
-		cmd := exec.Command(regExe, "DELETE", `HKCU\Environment`, "/V", key, "/F")
+		psKey := strings.ReplaceAll(key, "'", "''") // 转义单引号（防御性处理）
+		script := fmt.Sprintf(
+			`if ([Environment]::GetEnvironmentVariable('%s', 'User') -ne $null) { [Environment]::SetEnvironmentVariable('%s', $null, 'User'); Write-Output 'REMOVED' } else { Write-Output 'ABSENT' }`,
+			psKey, psKey,
+		)
+		cmd := exec.Command(psExe, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script)
 		output, err := cmd.CombinedOutput()
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("%s: %s", key, strings.TrimSpace(string(output))))
+			continue
+		}
+		if strings.Contains(string(output), "REMOVED") {
+			removed++
+		}
+		// 输出含 ABSENT：删除前就不存在，幂等成功，不计入 removed
+	}
+	if len(failures) > 0 {
+		return clearResult{
+			Location: "WSL → Windows 注册表",
+			Status:   "failed",
+			Message:  fmt.Sprintf("%d 个变量清除失败\n      %s", len(failures), strings.Join(failures, "\n      ")),
+		}
+	}
+	if removed == 0 {
+		return clearResult{Location: "WSL → Windows 注册表", Status: "skipped", Message: "注册表未包含受管变量"}
+	}
+	return clearResult{Location: "WSL → Windows 注册表", Status: "success", Message: fmt.Sprintf("已移除 %d 个环境变量（已自动广播变更）", removed)}
+}
+
+// clearWindowsRegistryFromWSLViaReg 回退路径：reg.exe 不会自动广播，且退出码 1 既可能是
+// "变量不存在"也可能是删除失败，用 QUERY 读校验区分——QUERY 也失败（即变量确实不存在）才视为
+// 幂等成功；QUERY 仍能查到该变量，说明 DELETE 是真的失败了。
+func clearWindowsRegistryFromWSLViaReg(regExe string) clearResult {
+	var failures []string
+	removed := 0
+	for _, key := range allEnvVarKeys {
+		delCmd := exec.Command(regExe, "DELETE", `HKCU\Environment`, "/V", key, "/F")
+		output, err := delCmd.CombinedOutput()
 		if err == nil {
 			removed++
 			continue
 		}
-		// reg.exe 在变量不存在时返回退出码 1，不应视为失败
-		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+		queryCmd := exec.Command(regExe, "QUERY", `HKCU\Environment`, "/V", key)
+		if queryErr := queryCmd.Run(); queryErr != nil {
+			// QUERY 也失败：变量确实已不存在，视为幂等成功
 			continue
 		}
 		failures = append(failures, fmt.Sprintf("%s: %s", key, strings.TrimSpace(string(output))))
@@ -2619,7 +2702,7 @@ func clearWindowsRegistryFromWSL() clearResult {
 	if removed == 0 {
 		return clearResult{Location: "WSL → Windows 注册表", Status: "skipped", Message: "注册表未包含受管变量"}
 	}
-	return clearResult{Location: "WSL → Windows 注册表", Status: "success", Message: fmt.Sprintf("已移除 %d 个环境变量", removed)}
+	return clearResult{Location: "WSL → Windows 注册表", Status: "success", Message: fmt.Sprintf("已移除 %d 个环境变量（已打开的 Windows 进程需重启/注销后才能感知变更）", removed)}
 }
 
 // clearFishUniversalVariables 通过 `fish -c "set -Ue KEY"` 真正清除 fish 的 universal 变量。
@@ -5506,7 +5589,7 @@ func runClearConfigMenu() (back bool) {
 	choice, b := runItemMenu("清除配置", []MenuItem{
 		{"1", "清除当前配置", "仅清除当前生效配置，保留已保存配置（用于切换/登录订阅账号）"},
 		{"2", "清除所有配置", "删除全部命名配置 + 清除 Claude Code 配置"},
-		{"3", "清除用户新增配置", "选择并删除某个已保存的命名配置"},
+		{"3", "删除已保存配置", "选择并删除某个已保存的命名配置文件"},
 	}, true)
 	if b {
 		return true // 返回主菜单
@@ -5533,6 +5616,9 @@ func runClearConfigMenu() (back bool) {
 }
 
 // runDeleteNamedConfigMenu 平铺所有命名配置，让用户选择删除其中一个。
+// 注意：这里只删除磁盘上已保存的命名配置文件，不会触碰当前生效的环境变量 /
+// Claude Code / VSCode 配置——即使该文件之前被应用过。若要清除当前生效配置，
+// 应使用「清除配置」菜单里的「清除当前配置」或「清除所有配置」。
 func runDeleteNamedConfigMenu() {
 	configs, err := listNamedConfigs()
 	if err != nil {
@@ -5543,6 +5629,9 @@ func runDeleteNamedConfigMenu() {
 		printInfo("暂无已保存的命名配置")
 		return
 	}
+	printWarning("仅删除已保存的命名配置文件，不影响当前生效的环境变量 / Claude Code / VSCode 配置")
+	printTip("如需清除当前生效配置，请返回上一层选择「清除当前配置」或「清除所有配置」")
+	fmt.Println()
 	items := make([]MenuItem, len(configs))
 	for i, c := range configs {
 		items[i] = MenuItem{strconv.Itoa(i + 1), fmt.Sprintf("删除 %s 配置", c.Name), maskToken(c.AuthToken)}
