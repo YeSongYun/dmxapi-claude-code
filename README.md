@@ -271,7 +271,7 @@ GOOS=darwin GOARCH=arm64 go build -o dmxapi-claude-code-macos-arm64 .
 
 ## 获取 Token
 
-访问 [https://www.dmxapi.cn/token](https://www.dmxapi.cn/token) 获取您的 API Token。
+访问 [https://www.dmxapi.cn/keys](https://www.dmxapi.cn/keys) 获取您的 API Token。
 
 ## 许可证
 

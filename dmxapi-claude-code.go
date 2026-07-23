@@ -3265,7 +3265,7 @@ func getNewAuthToken(existing, hostname string, allowBack bool) (string, bool) {
 	printSectionHeader("配置 API 认证令牌")
 
 	if hostname != "" {
-		fmt.Printf("  获取地址: https://%s/token\n", hostname)
+		fmt.Printf("  获取地址: https://%s/keys\n", hostname)
 	}
 
 	if existing != "" {
@@ -3398,7 +3398,7 @@ func inputNewBaseURL(allowBack bool) (string, bool) {
 // allowBack=true 时输入 b/back 返回（back=true）。
 func inputNewAuthToken(hostname string, allowBack bool) (string, bool) {
 	if hostname != "" {
-		fmt.Printf("  获取地址: https://%s/token\n", hostname)
+		fmt.Printf("  获取地址: https://%s/keys\n", hostname)
 	}
 	for {
 		input, back := styledInputWithBack("新 Auth Token")
