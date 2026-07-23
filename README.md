@@ -46,7 +46,7 @@ curl -fsSL https://cnb.cool/dmxapi/dmxapi_claude_code/-/git/raw/main/install.cmd
 
 ## 下载
 
-> **说明**：`[版本]` 替换为实际下载的版本号，如 `v1.8.9`
+> **说明**：`[版本]` 替换为实际下载的版本号，如 `v1.9.0`
 
 | 平台 | 架构 | 文件名 |
 |------|------|--------|
@@ -69,13 +69,13 @@ curl -fsSL https://cnb.cool/dmxapi/dmxapi_claude_code/-/git/raw/main/install.cmd
 
 ## 使用方法
 
-> **说明**：以下示例文件名中的 `v1.8.9` 为版本号示例，请替换为实际下载的版本号。
+> **说明**：以下示例文件名中的 `v1.9.0` 为版本号示例，请替换为实际下载的版本号。
 
 ### Windows x64
 
 ```powershell
 # 下载后直接运行
-.\dmxapi-claude-code-v1.8.9-windows-amd64.exe
+.\dmxapi-claude-code-v1.9.0-windows-amd64.exe
 ```
 
 ### Linux
@@ -89,10 +89,10 @@ curl -fsSL https://cnb.cool/dmxapi/dmxapi_claude_code/-/git/raw/main/install.cmd
 uname -m  # 应输出 x86_64
 
 # 添加执行权限
-chmod +x dmxapi-claude-code-v1.8.9-linux-amd64
+chmod +x dmxapi-claude-code-v1.9.0-linux-amd64
 
 # 运行
-./dmxapi-claude-code-v1.8.9-linux-amd64
+./dmxapi-claude-code-v1.9.0-linux-amd64
 ```
 
 #### Linux ARM64
@@ -104,10 +104,10 @@ chmod +x dmxapi-claude-code-v1.8.9-linux-amd64
 uname -m  # 应输出 aarch64
 
 # 添加执行权限
-chmod +x dmxapi-claude-code-v1.8.9-linux-arm64
+chmod +x dmxapi-claude-code-v1.9.0-linux-arm64
 
 # 运行
-./dmxapi-claude-code-v1.8.9-linux-arm64
+./dmxapi-claude-code-v1.9.0-linux-arm64
 ```
 
 ### macOS
@@ -121,11 +121,11 @@ chmod +x dmxapi-claude-code-v1.8.9-linux-arm64
 uname -m  # 应输出 arm64
 
 # 添加执行权限并移除 macOS 安全隔离标记
-chmod +x dmxapi-claude-code-v1.8.9-macos-arm64
-xattr -cr dmxapi-claude-code-v1.8.9-macos-arm64
+chmod +x dmxapi-claude-code-v1.9.0-macos-arm64
+xattr -cr dmxapi-claude-code-v1.9.0-macos-arm64
 
 # 运行
-./dmxapi-claude-code-v1.8.9-macos-arm64
+./dmxapi-claude-code-v1.9.0-macos-arm64
 ```
 
 #### macOS Intel (amd64)
@@ -137,11 +137,11 @@ xattr -cr dmxapi-claude-code-v1.8.9-macos-arm64
 uname -m  # 应输出 x86_64
 
 # 添加执行权限并移除 macOS 安全隔离标记
-chmod +x dmxapi-claude-code-v1.8.9-macos-amd64
-xattr -cr dmxapi-claude-code-v1.8.9-macos-amd64
+chmod +x dmxapi-claude-code-v1.9.0-macos-amd64
+xattr -cr dmxapi-claude-code-v1.9.0-macos-amd64
 
 # 运行
-./dmxapi-claude-code-v1.8.9-macos-amd64
+./dmxapi-claude-code-v1.9.0-macos-amd64
 ```
 
 > **说明**：`xattr -cr` 用于移除 macOS 对从网络下载文件添加的隔离标记（`com.apple.quarantine`），是 macOS 运行未签名可执行文件的必要步骤。若跳过此步骤，系统可能提示"无法验证开发者"或"已损坏，无法打开"。
@@ -193,9 +193,9 @@ echo $env:ANTHROPIC_BASE_URL
 A：这是 macOS Gatekeeper 的安全机制，并非文件损坏。按照上方安装步骤执行 `xattr -cr <文件名>` 移除隔离标记后重新运行即可（使用一键安装脚本时已自动处理）。若已错过此步骤，单独执行以下命令：
 
 ```bash
-xattr -cr dmxapi-claude-code-v1.8.9-macos-arm64  # Apple Silicon
+xattr -cr dmxapi-claude-code-v1.9.0-macos-arm64  # Apple Silicon
 # 或
-xattr -cr dmxapi-claude-code-v1.8.9-macos-amd64  # Intel
+xattr -cr dmxapi-claude-code-v1.9.0-macos-amd64  # Intel
 ```
 
 ---
