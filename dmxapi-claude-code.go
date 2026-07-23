@@ -90,37 +90,23 @@ const (
 	fixedDisableExperimentalBetas = "1"
 )
 
-// presetModel 描述二级菜单中一个预设模型条目：ID 用于写入配置，Hint 仅用于显示。
+// presetModel 描述二级菜单中一个预设模型条目：ID 用于写入配置，
+// Ctx1M 标记该模型是否支持 1M 上下文（决定写入时是否追加 [1m] 后缀）。
 type presetModel struct {
-	ID   string
-	Hint string
+	ID    string
+	Ctx1M bool
 }
 
 var presetModels = []presetModel{
-	{"claude-fable-5-cc", "3.4 折"},
-	{"claude-fable-5", "6.8 折"},
-	{"claude-fable-5-ssvip", ""},
-	{"claude-opus-4-8-cc", "3.4 折"},
-	{"claude-opus-4-8", "6.8 折"},
-	{"claude-opus-4-8-ssvip", ""},
-	{"claude-opus-4-7-cc", "3.4 折"},
-	{"claude-opus-4-7", "6.8 折"},
-	{"claude-opus-4-7-ssvip", ""},
-	{"claude-haiku-4-5-20251001-cc", "3.4 折"},
-	{"claude-haiku-4-5-20251001", "6.8 折"},
-	{"claude-haiku-4-5-20251001-ssvip", ""},
-	{"claude-sonnet-5-cc", "3.4 折"},
-	{"claude-sonnet-5", "6.8 折"},
-	{"claude-sonnet-5-ssvip", ""},
-	{"claude-sonnet-4-6-cc", "3.4 折"},
-	{"claude-sonnet-4-6", "6.8 折"},
-	{"claude-sonnet-4-6-ssvip", ""},
-	{"glm-5.1-cc", ""},
-	{"qwen3.6-plus-cc", ""},
-	{"mimo-v2-pro-cc", ""},
-	{"MiniMax-M2.7-cc", ""},
-	{"DeepSeek-V3.2-cc", ""},
-	{"hunyuan-2.0-thinking-20251109-cc", ""},
+	{"claude-fable-5-cc", true},
+	{"claude-opus-4-8-cc", true},
+	{"claude-sonnet-5-cc", true},
+	{"claude-haiku-4-5-20251001-cc", false}, // haiku 非 1M 上下文，不加 [1m]
+	{"kimi-k3-cc", true},
+	{"glm-5.2-cc", true},
+	{"qwen3.7-plus-cc", true},
+	{"deepseek-v4-pro-cc", true},
+	{"deepseek-v4-flash-cc", true},
 }
 
 // allEnvVarKeys 本工具管理的所有环境变量名，清除时使用
@@ -1611,9 +1597,18 @@ func vscodeSettingsPathFor(goos, homeDir, appData, wslWindowsHome string) string
 	}
 }
 
-// applyModelSuffix 对 claude-opus-4-8、claude-opus-4-7、claude-sonnet-4-6、claude-sonnet-5 和 claude-fable-5 系列模型 ID 追加 [1m] 后缀。
+// applyModelSuffix 对支持 1M 上下文的模型 ID 追加 [1m] 后缀：
+// 预设表内的模型以该条 Ctx1M 为准（命中即返回，不再落到家族匹配）；
+// 表外沿用 claude-opus-4-8、claude-opus-4-7、claude-sonnet-4-6、claude-sonnet-5、
+// claude-fable-5 的系列匹配，覆盖已移出预设表的历史配置值。
 func applyModelSuffix(id string) string {
 	if strings.HasSuffix(id, "[1m]") {
+		return id
+	}
+	if i := findPresetIndex(id); i >= 0 {
+		if presetModels[i].Ctx1M {
+			return id + "[1m]"
+		}
 		return id
 	}
 	if strings.Contains(id, "claude-opus-4-8") || strings.Contains(id, "claude-opus-4-7") || strings.Contains(id, "claude-sonnet-4-6") || strings.Contains(id, "claude-sonnet-5") || strings.Contains(id, "claude-fable-5") {
@@ -4035,11 +4030,7 @@ func renderL2Menu(typeName string, currentValue string, selectedIdx int, offset,
 		m := presetModels[li]
 		isCurrent := (m.ID == currentValue)
 		isSelected := (li == selectedIdx)
-		display := m.ID
-		if m.Hint != "" {
-			display = fmt.Sprintf("%s （%s）", m.ID, m.Hint)
-		}
-		name := truncateStr(display, boxWidth-6)
+		name := truncateStr(m.ID, boxWidth-6)
 		nameW := visibleLength(name)
 		var check string
 		var checkW int

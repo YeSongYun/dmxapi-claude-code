@@ -364,13 +364,16 @@ func TestApplyModelSuffix(t *testing.T) {
 	cases := []struct {
 		in, want string
 	}{
-		{"claude-opus-4-8-cc", "claude-opus-4-8-cc[1m]"}, // 本次新增匹配
+		{"claude-opus-4-8-cc", "claude-opus-4-8-cc[1m]"}, // 预设表内 Ctx1M
 		{"claude-opus-4-8", "claude-opus-4-8[1m]"},
-		{"claude-opus-4-7-cc", "claude-opus-4-7-cc[1m]"},     // 既有匹配保持
-		{"claude-sonnet-4-6-cc", "claude-sonnet-4-6-cc[1m]"}, // 既有匹配保持
+		{"claude-opus-4-7-cc", "claude-opus-4-7-cc[1m]"},     // 表外家族匹配保持
+		{"claude-sonnet-4-6-cc", "claude-sonnet-4-6-cc[1m]"}, // 表外家族匹配保持
 		{"claude-opus-4-8-cc[1m]", "claude-opus-4-8-cc[1m]"}, // 已有后缀幂等
 		{"claude-opus-4-6-cc", "claude-opus-4-6-cc"},         // 不匹配，原样返回
-		{"glm-5.1-cc", "glm-5.1-cc"},                         // 第三方模型原样返回
+		{"kimi-k3-cc", "kimi-k3-cc[1m]"},                     // 预设表内第三方模型也加后缀
+		{"glm-5.2-cc", "glm-5.2-cc[1m]"},
+		{"claude-haiku-4-5-20251001-cc", "claude-haiku-4-5-20251001-cc"}, // 表内但 Ctx1M=false，不加后缀
+		{"glm-5.1-cc", "glm-5.1-cc"},                                     // 表外第三方模型原样返回
 	}
 	for _, c := range cases {
 		if got := applyModelSuffix(c.in); got != c.want {
@@ -1454,7 +1457,8 @@ func TestMapTopMenuIndex(t *testing.T) {
 }
 
 func TestAdjustL2Window(t *testing.T) {
-	// total=25（24 预设 + 1 自定义），windowSize=16 对应 25 行高终端
+	// adjustL2Window 是纯函数，total/windowSize 均为入参；这里用合成值 total=25、
+	// windowSize=16 覆盖各类边界，与 presetModels 的实际长度无关。
 	cases := []struct {
 		name                           string
 		idx, offset, windowSize, total int
@@ -1510,9 +1514,9 @@ func TestRenderL2MenuLineCount(t *testing.T) {
 	}{
 		{"全量模式", 0, 0, 0, len(presetModels) + 7},
 		{"窗口尺寸不小于总数等同全量", 0, 0, total, len(presetModels) + 7},
-		{"窗口顶部", 0, 0, 16, 16 + 8},
-		{"窗口中部", 12, 5, 16, 16 + 8},
-		{"窗口底部含自定义项", total - 1, total - 16, 16, 16 + 8},
+		{"窗口顶部", 0, 0, 6, 6 + 8},
+		{"窗口中部", 5, 3, 6, 6 + 8},
+		{"窗口底部含自定义项", total - 1, total - 6, 6, 6 + 8},
 		{"极小窗口", 2, 1, 3, 3 + 8},
 	}
 	for _, c := range cases {
