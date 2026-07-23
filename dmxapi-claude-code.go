@@ -70,7 +70,7 @@ const (
 	attributionPRKey             = "pr"
 
 	// 默认模型值
-	defaultModel       = "claude-opus-4-8-cc"
+	defaultModel       = "claude-fable-5-cc"
 	defaultHaikuModel  = "claude-haiku-4-5-20251001-cc"
 	defaultSonnetModel = "claude-sonnet-5-cc"
 	defaultOpusModel   = "claude-opus-4-8-cc"
@@ -78,7 +78,7 @@ const (
 
 	// dmxapi 推荐配置（一键模式使用）
 	recommendedBaseURL     = "https://www.dmxapi.cn"
-	recommendedModel       = "claude-opus-4-8-cc"
+	recommendedModel       = "claude-fable-5-cc"
 	recommendedHaikuModel  = "claude-haiku-4-5-20251001-cc"
 	recommendedSonnetModel = "claude-sonnet-5-cc"
 	recommendedOpusModel   = "claude-opus-4-8-cc"
@@ -3332,7 +3332,7 @@ func selectTopModeDynamic() topMenuChoice {
 	configs, _ := listNamedConfigs() // 出错按空处理，不阻断主流程
 	n := len(configs)
 
-	items := []MenuItem{{"1", "dmxapi 推荐配置", "Claude Opus 4.8 一键配置"}}
+	items := []MenuItem{{"1", "dmxapi 推荐配置", "Claude Fable 5 一键配置"}}
 	for i, c := range configs {
 		items = append(items, MenuItem{strconv.Itoa(i + 2), c.Name, namedConfigDesc(c)})
 	}
@@ -4349,7 +4349,7 @@ func saveConfig(cfg Config) error {
 // 并自动写入 Claude settings、系统环境变量与 VSCode settings.json。
 // 返回 back=true 表示用户在 Token 输入或验证失败菜单按 ESC 返回主菜单。
 func runRecommendedConfig() (back bool) {
-	printSectionHeader("dmxapi 推荐配置 (Claude Opus 4.8)")
+	printSectionHeader("dmxapi 推荐配置 (Claude Fable 5)")
 	fmt.Println()
 	printInfo(fmt.Sprintf("Base URL:         %s", recommendedBaseURL))
 	printInfo(fmt.Sprintf("默认模型:         %s", recommendedModel))
