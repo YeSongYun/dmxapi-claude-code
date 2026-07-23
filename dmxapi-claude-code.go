@@ -2744,6 +2744,7 @@ func clearAllConfig() bool {
 //   - keepNamed=false（清除所有）：作为"清除所有配置"的底层逻辑，调用方随后另行删除命名配置文件；
 //   - keepNamed=true（清除当前）：用于登录订阅账号等场景，清掉当前生效配置但保留已保存配置，
 //     完成后直接退出，用户可重新运行本工具选择应用。
+//
 // 显示摘要 → 二次确认 → 逐位置清除 → 显示报告。
 // 返回 true 表示用户确认并执行了清除；false 表示用户取消。
 func clearActiveConfig(keepNamed bool) bool {
