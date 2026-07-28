@@ -73,15 +73,15 @@ const (
 	defaultModel       = "claude-fable-5-cc"
 	defaultHaikuModel  = "claude-haiku-4-5-20251001-cc"
 	defaultSonnetModel = "claude-sonnet-5-cc"
-	defaultOpusModel   = "claude-opus-4-8-cc"
+	defaultOpusModel   = "claude-opus-5-cc"
 	defaultFableModel  = "claude-fable-5-cc"
 
 	// dmxapi 推荐配置（一键模式使用）
 	recommendedBaseURL     = "https://www.dmxapi.cn"
-	recommendedModel       = "claude-fable-5-cc"
+	recommendedModel       = "claude-opus-5-cc"
 	recommendedHaikuModel  = "claude-haiku-4-5-20251001-cc"
 	recommendedSonnetModel = "claude-sonnet-5-cc"
-	recommendedOpusModel   = "claude-opus-4-8-cc"
+	recommendedOpusModel   = "claude-opus-5-cc"
 	recommendedFableModel  = "claude-fable-5-cc"
 
 	// recommendedAttributionText 新手流程默认 git 署名（写入 settings.json 顶层 attribution）
@@ -99,7 +99,7 @@ type presetModel struct {
 
 var presetModels = []presetModel{
 	{"claude-fable-5-cc", true},
-	{"claude-opus-4-8-cc", true},
+	{"claude-opus-5-cc", true},
 	{"claude-sonnet-5-cc", true},
 	{"claude-haiku-4-5-20251001-cc", false}, // haiku 非 1M 上下文，不加 [1m]
 	{"kimi-k3-cc", true},
@@ -1599,8 +1599,8 @@ func vscodeSettingsPathFor(goos, homeDir, appData, wslWindowsHome string) string
 
 // applyModelSuffix 对支持 1M 上下文的模型 ID 追加 [1m] 后缀：
 // 预设表内的模型以该条 Ctx1M 为准（命中即返回，不再落到家族匹配）；
-// 表外沿用 claude-opus-4-8、claude-opus-4-7、claude-sonnet-4-6、claude-sonnet-5、
-// claude-fable-5 的系列匹配，覆盖已移出预设表的历史配置值。
+// 表外沿用 claude-opus-5、claude-opus-4-8、claude-opus-4-7、claude-sonnet-4-6、
+// claude-sonnet-5、claude-fable-5 的系列匹配，覆盖已移出预设表的历史配置值。
 func applyModelSuffix(id string) string {
 	if strings.HasSuffix(id, "[1m]") {
 		return id
@@ -1611,7 +1611,7 @@ func applyModelSuffix(id string) string {
 		}
 		return id
 	}
-	if strings.Contains(id, "claude-opus-4-8") || strings.Contains(id, "claude-opus-4-7") || strings.Contains(id, "claude-sonnet-4-6") || strings.Contains(id, "claude-sonnet-5") || strings.Contains(id, "claude-fable-5") {
+	if strings.Contains(id, "claude-opus-5") || strings.Contains(id, "claude-opus-4-8") || strings.Contains(id, "claude-opus-4-7") || strings.Contains(id, "claude-sonnet-4-6") || strings.Contains(id, "claude-sonnet-5") || strings.Contains(id, "claude-fable-5") {
 		return id + "[1m]"
 	}
 	return id
@@ -3328,7 +3328,7 @@ func selectTopModeDynamic() topMenuChoice {
 	configs, _ := listNamedConfigs() // 出错按空处理，不阻断主流程
 	n := len(configs)
 
-	items := []MenuItem{{"1", "dmxapi 推荐配置", "Claude Fable 5 一键配置"}}
+	items := []MenuItem{{"1", "dmxapi 推荐配置", "Claude Opus 5 一键配置"}}
 	for i, c := range configs {
 		items = append(items, MenuItem{strconv.Itoa(i + 2), c.Name, namedConfigDesc(c)})
 	}
@@ -4341,7 +4341,7 @@ func saveConfig(cfg Config) error {
 // 并自动写入 Claude settings、系统环境变量与 VSCode settings.json。
 // 返回 back=true 表示用户在 Token 输入或验证失败菜单按 ESC 返回主菜单。
 func runRecommendedConfig() (back bool) {
-	printSectionHeader("dmxapi 推荐配置 (Claude Fable 5)")
+	printSectionHeader("dmxapi 推荐配置 (Claude Opus 5)")
 	fmt.Println()
 	printInfo(fmt.Sprintf("Base URL:         %s", recommendedBaseURL))
 	printInfo(fmt.Sprintf("默认模型:         %s", recommendedModel))
