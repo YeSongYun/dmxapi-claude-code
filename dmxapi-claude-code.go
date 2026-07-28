@@ -70,7 +70,7 @@ const (
 	attributionPRKey             = "pr"
 
 	// 默认模型值
-	defaultModel       = "claude-fable-5-cc"
+	defaultModel       = "claude-opus-5-cc"
 	defaultHaikuModel  = "claude-haiku-4-5-20251001-cc"
 	defaultSonnetModel = "claude-sonnet-5-cc"
 	defaultOpusModel   = "claude-opus-5-cc"
