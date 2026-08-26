@@ -6,12 +6,12 @@
 
 | 文件 | 位置 | 格式示例 | 说明 |
 |------|------|----------|------|
-| `dmxapi-claude-code.go` | 第 93 行 `appVersion` 常量 | `"1.4.6"` | 不带 `v` 前缀 |
-| `install.sh` | 文件顶部 `VERSION` 变量 | `"v1.4.6"` | 带 `v` 前缀 |
-| `install.ps1` | 文件顶部 `$VERSION` 变量 | `"v1.4.6"` | 带 `v` 前缀 |
-| `install.cmd` | 文件顶部 `VERSION` 变量 | `v1.4.6` | 带 `v` 前缀 |
-| `README.md` | 全文示例版本号（下载说明、使用方法、FAQ，共约 15 处）| `v1.4.6` | 带 `v` 前缀，全局搜索旧版本号替换即可 |
+| `dmxapi-claude-code.go` | `const` 块中的 `appVersion` 常量（用 `grep 'appVersion = ' dmxapi-claude-code.go` 定位）| `"X.Y.Z"` | 不带 `v` 前缀 |
+| `install.sh` | 文件顶部 `VERSION` 变量 | `"vX.Y.Z"` | 带 `v` 前缀 |
+| `install.ps1` | 文件顶部 `$VERSION` 变量 | `"vX.Y.Z"` | 带 `v` 前缀 |
+| `install.cmd` | 文件顶部 `VERSION` 变量 | `vX.Y.Z` | 带 `v` 前缀 |
+| `README.md` | 全文示例版本号（下载说明、使用方法、FAQ）| `vX.Y.Z` | 带 `v` 前缀，全局搜索旧版本号替换即可 |
 
-> **注意**：Go 源码中版本号不带 `v`（如 `"1.4.6"`），安装脚本中带 `v`（如 `"v1.4.6"`），两者格式不同，请勿混淆。
+> **注意**：Go 源码中版本号不带 `v`（如 `"X.Y.Z"`），安装脚本中带 `v`（如 `"vX.Y.Z"`），两者格式不同，请勿混淆。
 
 修改完上述文件后，再执行 commit → 打 tag → push tag 的发布流程。

@@ -92,6 +92,8 @@ $:
           image: cnbcool/default-build-env
           script:
             - |
+              # 清掉可能残留的上次运行结果，保证下游 stage 读到的一定是本次写的
+              rm -f .ai_fallback_reason
               # RELEASE_NOTES 为空（区间无新版本）→ 直接退出，跳过 AI 与回推（重跑幂等）
               if [ -z "${RELEASE_NOTES}" ]; then
                 echo "RELEASE_NOTES 为空，跳过 AI 润色" >&2
@@ -206,14 +208,101 @@ $:
                   exit 0
                 fi
                 echo "AI 输出格式验证失败（长度=${AI_LEN}），使用原始日志" >&2
+                # 落盘失败原因，供下一个「检查 AI 润色是否生效」stage 直接展示
+                echo "AI 输出格式验证失败（长度=${AI_LEN}）" > .ai_fallback_reason || true
               else
                 echo "AI API 调用失败 (HTTP $HTTP_CODE)，使用原始日志" >&2
+                # 落盘失败原因，供下一个「检查 AI 润色是否生效」stage 直接展示
+                echo "AI API 调用失败 (HTTP $HTTP_CODE)" > .ai_fallback_reason || true
               fi
 
               # 回退：输出原始 RELEASE_NOTES
               echo "${RELEASE_NOTES}"
           exports:
             stdout: AI_RELEASE_NOTES
+
+        # 2.5 自检：AI 润色是否真的生效
+        #     回退分支是静默的（退出码 0、流水线全绿），历史上 v1.8.5 / v1.8.8 /
+        #     v1.9.0 / v1.9.2 四次发布全部走了回退却没被发现。这里在写 CHANGELOG
+        #     和建 Release 之前把它显式打出来。
+        #     判据：回退分支执行的就是 echo "${RELEASE_NOTES}"，所以两个变量
+        #     （归一化尾部空白后）相同 ⟺ 走了回退。
+        - name: 检查 AI 润色是否生效
+          image: cnbcool/default-build-env
+          script:
+            - |
+              # 命令替换会剥掉尾部换行，抹平「回退分支的 echo 多补一个 \n」的差异，
+              # 这样无论 CNB 捕获 stdout 时剥不剥尾部空白，判据都成立。
+              # ${VAR-} 的写法是防 set -u（本 stage 是全文件里第一处在非导出方引用
+              # RELEASE_NOTES 的地方，也是最可能读不到它的位置）
+              AI_OUT=$(printf '%s' "${AI_RELEASE_NOTES-}")
+              RAW_OUT=$(printf '%s' "${RELEASE_NOTES-}")
+
+              # 第二个、与变量比较相互独立的判据：回退分支必然落盘这个文件，
+              # 而成功分支在落盘语句之前就 exit 0 了，必然不写。
+              # 上一个 stage 开头会先 rm -f，所以它只反映本次运行。
+              FELL_BACK=no
+              if [ -f .ai_fallback_reason ]; then
+                FELL_BACK=yes
+              fi
+
+              if [ -z "$AI_OUT" ]; then
+                echo "AI 润色未产出内容（区间无新版本或上游跳过）"
+                echo "本次不会更新 CHANGELOG；Release 仍会创建，但描述里的更新说明为空"
+                exit 0
+              fi
+
+              # AI_OUT 非空而 RAW_OUT 为空，在正常流程下不可能出现：RELEASE_NOTES
+              # 为空时上一个 stage 会直接 exit 0、不产出任何 stdout，AI_RELEASE_NOTES
+              # 也必为空。所以这只可能意味着 RELEASE_NOTES 没有传播到本 stage ——
+              # 此时变量比较失去意义，绝不能据此报「已生效」（那会变成永久漏报）
+              if [ -z "$RAW_OUT" ]; then
+                echo "=================================================="
+                echo "  警告：无法判定 AI 润色是否生效"
+                echo ""
+                echo "  RELEASE_NOTES 没有传播到本 stage（AI_RELEASE_NOTES 非空"
+                echo "  但它为空），正常流程下不会出现这种状态。"
+                if [ "$FELL_BACK" = yes ]; then
+                  printf '  上游落盘的失败原因：%s\n' "$(head -1 .ai_fallback_reason)"
+                  echo "  → 落盘文件存在，说明本次实际走了回退"
+                fi
+                echo "=================================================="
+                exit 0
+              fi
+
+              # 只有「两个变量不同」且「上游没落盘」同时成立，才敢判定生效
+              if [ "$AI_OUT" != "$RAW_OUT" ] && [ "$FELL_BACK" = no ]; then
+                echo "AI 润色已生效（输出与原始日志不同，且上游未记录失败）"
+                exit 0
+              fi
+
+              if [ "$AI_OUT" = "$RAW_OUT" ]; then
+                DIAG="输出与 git-cliff 原始日志逐字节相同"
+              else
+                DIAG="两个变量不同、但上游落盘了失败原因——变量传播可能有损（截断或空白变形）"
+              fi
+
+              echo "=================================================="
+              echo "  警告：AI 润色未生效，本次将使用 git-cliff 原始日志"
+              echo ""
+              echo "  即将写入 CHANGELOG.md 和 Release 描述的是未经改写的"
+              echo "  commit message，不是面向用户的说明。"
+              echo ""
+              echo "  判定依据：$DIAG"
+              if [ "$FELL_BACK" = yes ]; then
+                printf '  失败原因：%s\n' "$(head -1 .ai_fallback_reason)"
+              else
+                echo "  失败原因：见上一个 stage「AI 润色更新日志」的日志"
+              fi
+              echo ""
+              echo "  HTTP 000     → AI_API_URL 未配置或不可达"
+              echo "  HTTP 401/403 → AI_API_KEY 无效"
+              echo "  HTTP 400     → AI_MODEL 名或请求体参数不对"
+              echo "  格式验证失败 → 首行不是 ## 开头，或长度不在 50~15000"
+              echo ""
+              echo "  这三个变量在远程 env.yml 里配置："
+              echo "  https://cnb.cool/dmxapi/claude-code-my/-/blob/main/env.yml"
+              echo "=================================================="
 
         # 3. 更新 CHANGELOG.md 并推送回 main
         - name: 更新 CHANGELOG.md

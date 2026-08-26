@@ -7,3 +7,6 @@ dmxapi-claude-code.exe
 dmxapi-claude-code
 .worktrees/
 .claude/
+
+# CI 内部使用：AI 润色失败原因，供「检查 AI 润色是否生效」stage 读取
+.ai_fallback_reason
