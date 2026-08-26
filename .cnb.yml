@@ -101,13 +101,24 @@ $:
               cat > /tmp/ai_prompt.txt << 'PROMPT_EOF'
               你是一个软件更新日志编辑器。请将以下 git 变更日志改写为面向普通用户的中文更新说明。
 
-              要求：
-              1. 保留版本号和日期
-              2. 用通俗易懂的语言描述每个变更，去掉技术术语
-              3. 保留 emoji 分类图标
-              4. 每条说明控制在一行以内
-              5. 输出必须以 "## " 开头（Markdown 二级标题）
-              6. 只输出改写后的更新日志，不要输出其他内容
+              输出格式（必须严格遵守）：
+              1. 输出的第一行必须就是版本标题，格式为 "## 版本号 (日期)"，例如 "## 1.2.3 (2026-01-01)"。
+                 第一行之前不能有空行、前言或任何说明文字。
+              2. 版本号和日期必须原样照抄输入日志里的版本号和日期，不得改成其它版本号。
+              3. 不要用三个反引号的代码块把输出包起来，直接输出 Markdown 原文。
+              4. 分类标题用三级标题 "### " 并保留原有 emoji，例如 "### 🚀 新功能"。只有版本标题用 "## "。
+              5. 只输出改写后的更新日志，不要输出任何解释、前言或结尾说明。
+
+              内容要求：
+              6. 每个变更写成一个列表项。先用一行加粗写出这条改了什么，换行后缩进两格，
+                 再用 2 到 3 句话展开：具体做了什么、对使用者有什么影响、需不需要动手操作。
+                 涉及操作时说清楚在哪个菜单、点哪里。
+              7. 面向完全不懂技术的普通用户：不要出现函数名、变量名、文件名、代码标识符。
+                 输入里的模型 ID、参数名这类技术名词，改用普通人能理解的说法，
+                 例如把 "glm-5.3-cc" 说成"智谱 GLM 模型"。
+              8. 对纯内部改动（发布版本号、CI 配置、文档整理等对使用者没有直接影响的），
+                 一句话带过即可，不要展开成 2 到 3 句。只有真正影响使用体验的改动才详细展开。
+              9. 忠于输入日志，不要编造输入里没有的变更。
 
               原始变更日志：
               PROMPT_EOF
@@ -125,14 +136,14 @@ $:
                       -d "$(jq -n \
                         --arg model "${AI_MODEL}" \
                         --arg prompt "${PROMPT}" \
-                        '{model: $model, max_tokens: 4096, messages: [{role: "user", content: $prompt}]}')"
+                        '{model: $model, max_tokens: 8192, messages: [{role: "user", content: $prompt}]}')"
                     ;;
                   gemini*)
                     curl -s -w "\n%{http_code}" "${AI_API_URL}/v1beta/models/${AI_MODEL}:generateContent?key=${AI_API_KEY}" \
                       -H "Content-Type: application/json" \
                       -d "$(jq -n \
                         --arg prompt "${PROMPT}" \
-                        '{contents: [{parts: [{text: $prompt}]}], generationConfig: {maxOutputTokens: 4096}}')"
+                        '{contents: [{parts: [{text: $prompt}]}], generationConfig: {maxOutputTokens: 8192}}')"
                     ;;
                   gpt-5*)
                     curl -s -w "\n%{http_code}" "${AI_API_URL}/v1/responses" \
@@ -141,7 +152,7 @@ $:
                       -d "$(jq -n \
                         --arg model "${AI_MODEL}" \
                         --arg prompt "${PROMPT}" \
-                        '{model: $model, input: $prompt, max_output_tokens: 4096}')"
+                        '{model: $model, input: $prompt, max_output_tokens: 8192}')"
                     ;;
                   *)
                     curl -s -w "\n%{http_code}" "${AI_API_URL}/v1/completions" \
@@ -150,7 +161,7 @@ $:
                       -d "$(jq -n \
                         --arg model "${AI_MODEL}" \
                         --arg prompt "${PROMPT}" \
-                        '{model: $model, prompt: $prompt, max_tokens: 4096}')"
+                        '{model: $model, prompt: $prompt, max_tokens: 8192}')"
                     ;;
                 esac
               }
@@ -190,7 +201,7 @@ $:
                 AI_TEXT=$(extract_ai_text "$BODY")
                 AI_LEN=${#AI_TEXT}
                 # 验证输出格式
-                if echo "$AI_TEXT" | head -1 | grep -q '^## ' && [ "$AI_LEN" -le 10000 ]; then
+                if echo "$AI_TEXT" | head -1 | grep -q '^## ' && [ "$AI_LEN" -ge 50 ] && [ "$AI_LEN" -le 15000 ]; then
                   echo "$AI_TEXT"
                   exit 0
                 fi
