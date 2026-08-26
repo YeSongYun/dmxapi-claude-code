@@ -103,10 +103,10 @@ var presetModels = []presetModel{
 	{"claude-sonnet-5-cc", true},
 	{"claude-haiku-4-5-20251001-cc", false}, // haiku 非 1M 上下文，不加 [1m]
 	{"kimi-k3-cc", true},
-	{"glm-5.2-cc", true},
-	{"qwen3.7-plus-cc", true},
-	{"deepseek-v4-pro-cc", true},
-	{"deepseek-v4-flash-cc", true},
+	{"glm-5.3-cc", true},
+	{"qwen3.8-max-cc", true},
+	{"deepseek-v4-pro-0813-cc", true},
+	{"deepseek-v4-flash-0731-cc", true},
 }
 
 // allEnvVarKeys 本工具管理的所有环境变量名，清除时使用

@@ -373,7 +373,7 @@ func TestApplyModelSuffix(t *testing.T) {
 		{"claude-opus-5-cc[1m]", "claude-opus-5-cc[1m]"},     // 已有后缀幂等
 		{"claude-opus-4-6-cc", "claude-opus-4-6-cc"},         // 不匹配，原样返回
 		{"kimi-k3-cc", "kimi-k3-cc[1m]"},                     // 预设表内第三方模型也加后缀
-		{"glm-5.2-cc", "glm-5.2-cc[1m]"},
+		{"glm-5.3-cc", "glm-5.3-cc[1m]"},
 		{"claude-haiku-4-5-20251001-cc", "claude-haiku-4-5-20251001-cc"}, // 表内但 Ctx1M=false，不加后缀
 		{"glm-5.1-cc", "glm-5.1-cc"},                                     // 表外第三方模型原样返回
 	}
