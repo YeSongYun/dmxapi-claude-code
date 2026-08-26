@@ -6,21 +6,23 @@
 
 ## 1.9.2 (2026-08-26)
 
-### 📖 文档
+### 🚀 新功能
 
-- Update CHANGELOG.md for v1.9.1
+- **预设模型列表里的 4 个国产模型换成了新版本**
+  智谱 GLM、通义千问、DeepSeek 这几个模型的可选项都更新到了最新版
+  （glm-5.3-cc、qwen3.8-max-cc、deepseek-v4-pro-0813-cc、
+  deepseek-v4-flash-0731-cc），四个都支持 100 万字的超长上下文。
+  如果你之前选的是这几个模型的旧版本，请重新进入「配置模型设置」
+  选一次新的名称，旧名称已经不在列表里，继续用可能会连不上。
+  用 Claude 系列模型的用户不受影响，不需要做任何操作。
 
 ### 🔧 CI/CD
 
-- 更新日志改为详细的用户向说明 —— 把 CI 自动生成的更新日志从「每条一行」改成「每条 2-3 句展开」， 让不懂技术的用户也能看懂每次更新改了什么、要不要动手操作。 CHANGELOG.md 与 Release 描述同源，一处改动两边生效。  .cnb.yml AI prompt 重写： - 删掉「每条说明控制在一行以内」，改为每条先加粗点题、再用 2-3 句   说明影响与所需操作 - 锁死首行为 "## 版本号 (日期)" 且版本号原样照抄，避免下次发布时   区间推导拿到错误的上次版本号 - 显式禁止代码围栏、前言、首行空行——这三种污染会让首行校验失败，   静默回退成一行式原文且 CI 全绿 - 分类标题固定三级，避免 Release 页面层级错乱 - 纯内部改动（发布、CI、文档）一句话带过，不占用户视线  .cnb.yml 长度参数：max_tokens 4096 → 8192（4 处，含 gemini 的 maxOutputTokens 与 gpt-5 的 max_output_tokens）；输出校验上限 10000 → 15000 并新增下限 50，堵住「被截断的半截日志仍以 ## 开头 从而通过校验、被永久写入 CHANGELOG」的漏洞。  cliff.toml 模板带上 commit body：原模板只取 message 第一行， body 里的细节全丢，AI 没有素材只能写得笼统。改为单行内联追加 （trim = true 会逐行剥缩进，不能用缩进续行），并对非 conventional commit 的 undefined body 做三重保护。  已用与 CI 相同的 git-cliff 2.7.0 本地实测：body 正确带出、 Co-Authored-By 尾注被解析为 footer 未泄漏、bullet 仍为单行。
+- 调整了自动生成更新日志的规则，让每条说明更详细、更容易看懂。
 
 ### 🔨 杂项
 
-- 发布 v1.9.2 —— 同步 CLAUDE.md 规定的 5 处版本号：dmxapi-claude-code.go 的 appVersion（不带 v）、install.sh / install.ps1 / install.cmd 的 VERSION（带 v）、README.md 的 15 处下载与使用示例。
-
-### 🚀 新功能
-
-- 更新预设列表中 4 个第三方模型 ID —— glm-5.2-cc → glm-5.3-cc qwen3.7-plus-cc → qwen3.8-max-cc deepseek-v4-pro-cc → deepseek-v4-pro-0813-cc deepseek-v4-flash-cc → deepseek-v4-flash-0731-cc  四者均保持 1M 上下文（Ctx1M=true），同步更新 TestApplyModelSuffix 中 对应断言，避免改名后该用例落到表外家族匹配而失败。
+- 发布 v1.9.2，同步各处版本号与安装脚本。
 
 ## 1.9.1 (2026-07-28)
 

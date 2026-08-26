@@ -16,7 +16,7 @@ body = """
 {% for group, commits in commits | group_by(attribute="group") %}
     ### {{ group | upper_first }}
     {% for commit in commits %}
-        - {{ commit.message | upper_first | split(pat="\n") | first }}{% set b = commit.body | default(value="") | trim | replace(from="\n", to=" ") | trim %}{% if b %} —— {{ b }}{% endif %}\
+        - {{ commit.message | upper_first | split(pat="\n") | first }}{% set b = commit.body | default(value="") | trim | replace(from="\n", to=" ") | trim | truncate(length=160, end="…") %}{% if b %} —— {{ b }}{% endif %}\
     {% endfor %}
 {% endfor %}
 """
