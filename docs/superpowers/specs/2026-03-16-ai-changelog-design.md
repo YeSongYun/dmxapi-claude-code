@@ -41,12 +41,13 @@ Step 7: 清理旧版本（已有）
 
 ### AI 调用细节
 
-**接口**: Anthropic `/v1/messages`
+**接口**: 默认 Anthropic `/v1/messages`。**不按模型名前缀猜厂商** —— DMXAPI 的 Anthropic 模型可能叫 `dmxapi-anthropic`，本产品预设的 `kimi-k3-cc` / `glm-5.3-cc` / `qwen3.8-max-cc` / `deepseek-v4-*-cc` 也全部走 `/v1/messages`（见 Go 侧 `validateAPIConnection`）。只有请求体结构真正不兼容的 `gemini*` / `gpt-5*` 才另开分支；猜错时自动改试一次 OpenAI Chat Completions。
 
-**环境变量**（需在远程 env.yml 中新增，路径: `https://cnb.cool/dmxapi/claude-code-my/-/blob/main/env.yml`）:
-- `AI_API_URL` — API 地址（如 `https://api.dmxapi.cn`）
+**环境变量**（在远程 env.yml 中配置，路径: `https://cnb.cool/dmxapi/claude-code-my/-/blob/main/env.yml`）:
+- `AI_API_URL` — API 地址（裸域名，如 `https://www.dmxapi.cn`；带不带尾部 `/v1` 都会被归一化）
 - `AI_API_KEY` — API 密钥
-- `AI_MODEL` — 模型名（如 `claude-sonnet-4-20250514`）
+- `AI_MODEL` — 模型名（如 `dmxapi-anthropic`）
+- `AI_API_STYLE` — **可选**逃生舱，取值 `anthropic` | `openai` | `gemini` | `responses`。配了就不再按模型名猜接口风格。
 
 **CI 镜像**: 使用 `cnbcool/default-build-env`（已确认包含 `curl` 和 `jq`）。
 
@@ -66,11 +67,16 @@ Step 7: 清理旧版本（已有）
 {RELEASE_NOTES}
 ```
 
-**实现方式**: 在 `.cnb.yml` 中用 shell script + curl 调用，使用 `jq` 解析返回的 JSON 中 `content[0].text` 字段。
+**实现方式**: 在 `.cnb.yml` 中用 shell script + curl 调用，用 `jq` 按 6 条路径依次兜底解析（Anthropic 合并 text block / `content[0].text` / OpenAI Chat / OpenAI 旧 Completions / Gemini / Responses）。
+> ⚠️ **合并全部 text block 的那条必须排在 `content[0].text` 之前**——否则模型返回多个 text block 时后面的会被静默丢弃，而半截日志照样能通过首行与长度校验，被 GPG 签名推进 `CHANGELOG.md` 和公开 Release。改这段代码前先看 `.cnb.yml` 里的同款注释。
 
-**输出验证**: AI 返回内容必须满足：以 `## ` 开头且长度不超过 5000 字符。不满足则回退使用原始 `RELEASE_NOTES`。
+**输出验证**: AI 返回内容必须依次满足：(1) 未被 `max_tokens` 截断（检查 `stop_reason` / `finish_reason` / `finishReason`）；(2) 以 `## ` 开头；(3) 长度在 50~15000 **字节**之间。任一不满足则回退使用原始 `RELEASE_NOTES`。
 
-**重试与错误处理**: AI 调用失败时自动重试 1 次（间隔 3 秒）。如果重试仍失败（网络错误、API 异常、HTTP 非 200、输出验证失败），回退使用原始 `RELEASE_NOTES`，不阻塞发布流程。
+**重试与错误处理**: 同接口自动重试 1 次（间隔 3 秒）；若判定为接口风格猜错——HTTP 400/404/405/501，或 HTTP 200 却一条路径都解析不出文本——再自动改试一次 OpenAI Chat Completions，最坏共 3 次请求。HTTP 000/401/403/429/5xx 刻意**不**换接口（换个 path 打同一台主机没有意义，限流时再打一发更糟）。
+
+超时预算：主接口 `--connect-timeout 15 --max-time 300`，换接口那一发 `--max-time 120`。
+
+以上任一环节失败（网络错误、API 异常、HTTP 非 200、输出被 `max_tokens` 截断、格式验证不过），都回退使用原始 `RELEASE_NOTES`，不阻塞发布流程。回退前会把接口风格、请求 URL、HTTP 码与响应前 300 字符（经脱敏）打到 stderr 并写入 `.ai_fallback_reason`，供下一个「检查 AI 润色是否生效」stage 展示。
 
 ### CHANGELOG.md 文件结构
 
