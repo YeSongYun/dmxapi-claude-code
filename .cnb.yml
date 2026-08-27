@@ -190,7 +190,7 @@ $:
                       -H "Content-Type: application/json" \
                       -d "$(jq -n \
                         --arg prompt "${PROMPT}" \
-                        '{contents: [{parts: [{text: $prompt}]}], generationConfig: {maxOutputTokens: 4096}}')"
+                        '{contents: [{parts: [{text: $prompt}]}], generationConfig: {maxOutputTokens: 32000}}')"
                     ;;
                   responses)
                     curl -s -w "\n%{http_code}" --connect-timeout 15 --max-time "$_maxtime" \
@@ -200,7 +200,7 @@ $:
                       -d "$(jq -n \
                         --arg model "${AI_MODEL}" \
                         --arg prompt "${PROMPT}" \
-                        '{model: $model, input: $prompt, max_output_tokens: 4096}')"
+                        '{model: $model, input: $prompt, max_output_tokens: 32000}')"
                     ;;
                   openai)
                     curl -s -w "\n%{http_code}" --connect-timeout 15 --max-time "$_maxtime" \
@@ -210,7 +210,7 @@ $:
                       -d "$(jq -n \
                         --arg model "${AI_MODEL}" \
                         --arg prompt "${PROMPT}" \
-                        '{model: $model, max_tokens: 4096, messages: [{role: "user", content: $prompt}]}')"
+                        '{model: $model, max_tokens: 32000, messages: [{role: "user", content: $prompt}]}')"
                     ;;
                   *)
                     curl -s -w "\n%{http_code}" --connect-timeout 15 --max-time "$_maxtime" \
@@ -221,7 +221,7 @@ $:
                       -d "$(jq -n \
                         --arg model "${AI_MODEL}" \
                         --arg prompt "${PROMPT}" \
-                        '{model: $model, max_tokens: 4096, messages: [{role: "user", content: $prompt}]}')"
+                        '{model: $model, max_tokens: 32000, messages: [{role: "user", content: $prompt}]}')"
                     ;;
                 esac
               }
@@ -299,6 +299,7 @@ $:
 
               if [ "$SWITCH" = yes ]; then
                 echo "接口可能猜错（风格=${USED_STYLE}, HTTP=${HTTP_CODE}, 解析结果为空），改用 OpenAI Chat Completions 重试一次" >&2
+                echo "（HTTP 400 也可能是 max_tokens 超出上游模型的硬上限，此时换接口同样会失败）" >&2
                 USED_STYLE=openai
                 RESPONSE=$(call_ai openai 120) || true
                 HTTP_CODE=$(printf '%s\n' "$RESPONSE" | tail -1)
@@ -321,7 +322,7 @@ $:
                 # tr -d ' ' 抹掉 BSD wc 的前导空格
                 AI_LEN=$(printf '%s' "$AI_TEXT" | wc -c | tr -d ' ')
                 if printf '%s\n' "$AI_TEXT" | head -1 | grep -q '^## ' \
-                   && [ "$AI_LEN" -ge 50 ] && [ "$AI_LEN" -le 15000 ]; then
+                   && [ "$AI_LEN" -ge 50 ] && [ "$AI_LEN" -le 100000 ]; then
                   printf '%s\n' "$AI_TEXT"
                   exit 0
                 fi
@@ -330,7 +331,7 @@ $:
                 elif [ "$AI_LEN" -lt 50 ]; then
                   FAIL_REASON="AI 输出过短（长度=${AI_LEN} < 50 字节）"
                 else
-                  FAIL_REASON="AI 输出过长（长度=${AI_LEN} > 15000 字节）"
+                  FAIL_REASON="AI 输出过长（长度=${AI_LEN} > 100000 字节）"
                 fi
               fi
 
@@ -341,6 +342,9 @@ $:
                 echo "  AI 润色失败，本次回退到 git-cliff 原始日志"
                 echo "  原因      : ${FAIL_REASON}"
                 echo "  接口风格  : ${STYLE} -> 实际使用 ${USED_STYLE}"
+                if [ "$STYLE" != "$USED_STYLE" ]; then
+                  echo "  首发 URL  : $(api_url_for "$STYLE" | redact)"
+                fi
                 echo "  请求 URL  : $(api_url_for "$USED_STYLE" | redact)"
                 echo "  HTTP 状态 : ${HTTP_CODE}"
                 echo "  响应前 300 字符："
@@ -436,7 +440,7 @@ $:
               echo "  HTTP 401/403 → AI_API_KEY 无效"
               echo "  HTTP 400     → AI_MODEL 名或请求体参数不对"
               echo "  HTTP 404/405 → 接口风格猜错（会自动改试 OpenAI Chat 一次）"
-              echo "  格式验证失败 → 首行不是 ## 开头，或长度不在 50~15000 字节"
+              echo "  格式验证失败 → 首行不是 ## 开头，或长度不在 50~100000 字节"
               echo "  输出被截断   → 撞上 max_tokens，半截日志已丢弃"
               echo ""
               echo "  上一个 stage 的日志里会打出实际请求的 URL、接口风格和响应片段。"

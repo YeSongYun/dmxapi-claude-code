@@ -153,7 +153,7 @@ var validTopEffortLevels = map[string]bool{
 
 // 版本号 / 盒子宽度保持 const（运行时不会变）
 const (
-	appVersion = "1.9.3"
+	appVersion = "1.9.4"
 	boxWidth   = 60
 )
 

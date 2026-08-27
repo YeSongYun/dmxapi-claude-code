@@ -70,7 +70,7 @@ Step 7: 清理旧版本（已有）
 **实现方式**: 在 `.cnb.yml` 中用 shell script + curl 调用，用 `jq` 按 6 条路径依次兜底解析（Anthropic 合并 text block / `content[0].text` / OpenAI Chat / OpenAI 旧 Completions / Gemini / Responses）。
 > ⚠️ **合并全部 text block 的那条必须排在 `content[0].text` 之前**——否则模型返回多个 text block 时后面的会被静默丢弃，而半截日志照样能通过首行与长度校验，被 GPG 签名推进 `CHANGELOG.md` 和公开 Release。改这段代码前先看 `.cnb.yml` 里的同款注释。
 
-**输出验证**: AI 返回内容必须依次满足：(1) 未被 `max_tokens` 截断（检查 `stop_reason` / `finish_reason` / `finishReason`）；(2) 以 `## ` 开头；(3) 长度在 50~15000 **字节**之间。任一不满足则回退使用原始 `RELEASE_NOTES`。
+**输出验证**: AI 返回内容必须依次满足：(1) 未被 `max_tokens` 截断（检查 `stop_reason` / `finish_reason` / `finishReason`）；(2) 以 `## ` 开头；(3) 长度在 50~100000 **字节**之间。任一不满足则回退使用原始 `RELEASE_NOTES`。
 
 **重试与错误处理**: 同接口自动重试 1 次（间隔 3 秒）；若判定为接口风格猜错——HTTP 400/404/405/501，或 HTTP 200 却一条路径都解析不出文本——再自动改试一次 OpenAI Chat Completions，最坏共 3 次请求。HTTP 000/401/403/429/5xx 刻意**不**换接口（换个 path 打同一台主机没有意义，限流时再打一发更糟）。
 
