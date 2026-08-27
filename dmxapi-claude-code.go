@@ -104,7 +104,9 @@ var presetModels = []presetModel{
 	{"claude-haiku-4-5-20251001-cc", false}, // haiku 非 1M 上下文，不加 [1m]
 	{"kimi-k3-cc", true},
 	{"glm-5.3-cc", true},
+	{"glm-5.3-flash-cc", true},
 	{"qwen3.8-max-cc", true},
+	{"qwen3.8-flash-cc", true},
 	{"deepseek-v4-pro-0813-cc", true},
 	{"deepseek-v4-flash-0731-cc", true},
 }
