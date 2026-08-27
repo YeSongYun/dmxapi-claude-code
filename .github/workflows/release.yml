@@ -154,8 +154,8 @@ jobs:
 
             ### 🔗 相关链接
 
-            - [获取 API Token](https://www.dmxapi.cn/token)
-            - [使用文档](https://www.dmxapi.cn/claudecode)
+            - [获取 API Token](https://www.dmxapi.cn/keys)
+            - [使用文档](https://doc.dmxapi.cn/claude-code-new.html)
             
           files: |
             dmxapi-claude-code-${{ github.ref_name }}-windows-amd64.exe

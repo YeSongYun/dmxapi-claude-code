@@ -658,8 +658,8 @@ $:
 
               ### 🔗 相关链接
 
-              - [获取 API Token](https://www.dmxapi.cn/token)
-              - [使用文档](https://www.dmxapi.cn/claudecode)
+              - [获取 API Token](https://www.dmxapi.cn/keys)
+              - [使用文档](https://doc.dmxapi.cn/claude-code-new.html)
 
         # 6. 再上传附件到已创建的 Release
         - name: 上传 Release 附件

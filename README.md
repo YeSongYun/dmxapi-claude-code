@@ -273,6 +273,10 @@ GOOS=darwin GOARCH=arm64 go build -o dmxapi-claude-code-macos-arm64 .
 
 访问 [https://www.dmxapi.cn/keys](https://www.dmxapi.cn/keys) 获取您的 API Token。
 
+## 使用文档
+
+详见 [https://doc.dmxapi.cn/claude-code-new.html](https://doc.dmxapi.cn/claude-code-new.html)。
+
 ## 许可证
 
 MIT License
