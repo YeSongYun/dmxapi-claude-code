@@ -3,10 +3,14 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -2555,5 +2559,443 @@ func TestApplyNamedConfig_LegacyUltracodeNormalized(t *testing.T) {
 	}
 	if env, _ := m["env"].(map[string]interface{}); env["CLAUDE_CODE_EFFORT_LEVEL"] != "xhigh" {
 		t.Errorf("env 块 effort = %v, want xhigh", env["CLAUDE_CODE_EFFORT_LEVEL"])
+	}
+}
+
+// ==================== 外部命令超时 / spinner 兜底超时 ====================
+
+func TestExecCombinedWithTimeoutHangingCommand(t *testing.T) {
+	start := time.Now()
+	_, err := execCombinedWithTimeout(300*time.Millisecond, "/bin/sh", "-c", "sleep 30")
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected error for hanging command")
+	}
+	if !errors.Is(err, errCommandTimeout) {
+		t.Fatalf("expected errCommandTimeout, got %v", err)
+	}
+	// 关键回归点：挂起的命令必须在超时附近返回，而不是无限阻塞
+	if elapsed > 5*time.Second {
+		t.Fatalf("execCombinedWithTimeout blocked for %v, expected ~300ms", elapsed)
+	}
+}
+
+// TestExecCombinedWithTimeoutOrphanKeepsPipe 覆盖 WaitDelay 的存在理由：
+// 子进程已退出，但它派生的孙进程仍继承着 stdout 管道。没有 WaitDelay 时
+// CombinedOutput 会一直读到管道 EOF（即孙进程 30 秒后结束）才返回；
+// 有 WaitDelay 时最多多等 commandWaitDelay 就关掉管道返回，且不算作失败。
+func TestExecCombinedWithTimeoutOrphanKeepsPipe(t *testing.T) {
+	// 上界取 sleep 时长的一半：只要没退化成"等孙进程 30 秒"，这个测试就成立；
+	// 同时远大于 commandWaitDelay，避免在过载机器上因调度抖动 flaky。
+	timeout := 15 * time.Second
+	start := time.Now()
+	_, err := execCombinedWithTimeout(timeout, "/bin/sh", "-c", "sleep 30 & exit 0")
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("命令自身已正常退出，ErrWaitDelay 不该被当成失败，got %v", err)
+	}
+	if elapsed >= timeout {
+		t.Fatalf("execCombinedWithTimeout blocked for %v waiting on an orphan's pipe", elapsed)
+	}
+}
+
+func TestExecCombinedWithTimeoutSuccess(t *testing.T) {
+	out, err := execCombinedWithTimeout(5*time.Second, "/bin/sh", "-c", "printf 'hello'")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(out) != "hello" {
+		t.Fatalf("output = %q, want %q", string(out), "hello")
+	}
+}
+
+func TestExecOutputWithTimeoutExcludesStderr(t *testing.T) {
+	out, err := execOutputWithTimeout(5*time.Second, "/bin/sh", "-c", "printf 'C:\\Users\\me'; printf 'UNC warning' 1>&2")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(string(out), "UNC warning") {
+		t.Fatalf("stdout-only variant leaked stderr: %q", string(out))
+	}
+}
+
+// TestClassifyRegQueryResult 覆盖 Windows 专属陷阱：TerminateProcess(handle, 1) 让被超时
+// 杀掉的子进程退出码恰好是 1，与 REG QUERY 表示"变量不存在"的退出码相同。必须先判超时。
+// 这个撞车在 Unix 上复现不出来（那里 Kill 后 ExitCode 是 -1），所以只能靠这个平台无关的纯函数测。
+func TestClassifyRegQueryResult(t *testing.T) {
+	exitOne := exitErrWithCode(t, 1)
+
+	t.Run("退出码1且未超时=变量不存在", func(t *testing.T) {
+		val, exists, err := classifyRegQueryResult("ANTHROPIC_MODEL", nil, exitOne)
+		if err != nil {
+			t.Fatalf("expected nil error, got %v", err)
+		}
+		if exists || val != "" {
+			t.Fatalf("expected not-exists, got val=%q exists=%v", val, exists)
+		}
+	})
+
+	t.Run("退出码1但已超时=超时错误而非变量不存在", func(t *testing.T) {
+		wrapped := fmt.Errorf("执行 REG 超过 30s 仍未返回: %w", errCommandTimeout)
+		_, exists, err := classifyRegQueryResult("ANTHROPIC_MODEL", nil, wrapped)
+		if err == nil {
+			t.Fatal("超时必须报错，不能被当成'变量不存在'——否则用户会拿到一条完全错误的诊断")
+		}
+		if !errors.Is(err, errCommandTimeout) {
+			t.Fatalf("expected errCommandTimeout, got %v", err)
+		}
+		if exists {
+			t.Fatal("expected exists=false on timeout")
+		}
+	})
+
+	t.Run("成功时解析值", func(t *testing.T) {
+		output := []byte("\r\nHKEY_CURRENT_USER\\Environment\r\n    ANTHROPIC_MODEL    REG_SZ    claude-opus-5\r\n\r\n")
+		val, exists, err := classifyRegQueryResult("ANTHROPIC_MODEL", output, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !exists || val != "claude-opus-5" {
+			t.Fatalf("got val=%q exists=%v, want claude-opus-5/true", val, exists)
+		}
+	})
+
+	t.Run("其他错误原样透出并附带输出", func(t *testing.T) {
+		_, _, err := classifyRegQueryResult("ANTHROPIC_MODEL", []byte("ACCESS DENIED"), exitErrWithCode(t, 5))
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if !strings.Contains(err.Error(), "ACCESS DENIED") {
+			t.Fatalf("expected command output in error, got %q", err.Error())
+		}
+	})
+}
+
+// exitErrWithCode 构造一个真实的 *exec.ExitError，其退出码为 code。
+func exitErrWithCode(t *testing.T, code int) error {
+	t.Helper()
+	err := exec.Command("/bin/sh", "-c", fmt.Sprintf("exit %d", code)).Run()
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("expected *exec.ExitError, got %v", err)
+	}
+	if exitErr.ExitCode() != code {
+		t.Fatalf("exit code = %d, want %d", exitErr.ExitCode(), code)
+	}
+	return err
+}
+
+func TestRunWithSpinnerTimeoutHangingTask(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+
+	var err error
+	start := time.Now()
+	_ = captureStdout(t, func() {
+		err = runWithSpinnerTimeout("正在保存配置...", 300*time.Millisecond, func() error {
+			<-release // 永不主动返回，模拟被外部命令卡死的保存
+			return nil
+		})
+	})
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+	if !errors.Is(err, errSpinnerTimeout) {
+		t.Fatalf("expected errSpinnerTimeout, got %v", err)
+	}
+	if elapsed > 5*time.Second {
+		t.Fatalf("runWithSpinnerTimeout blocked for %v, expected ~300ms", elapsed)
+	}
+	// 用户必须能从错误里看出是哪一步超时
+	if !strings.Contains(err.Error(), "正在保存配置") {
+		t.Fatalf("timeout error should name the step, got %q", err.Error())
+	}
+}
+
+func TestRunWithSpinnerTimeoutPassesThrough(t *testing.T) {
+	sentinel := errors.New("boom")
+
+	t.Run("透传 task 的错误", func(t *testing.T) {
+		var err error
+		_ = captureStdout(t, func() {
+			err = runWithSpinnerTimeout("正在保存配置...", 5*time.Second, func() error { return sentinel })
+		})
+		if !errors.Is(err, sentinel) {
+			t.Fatalf("expected sentinel error, got %v", err)
+		}
+	})
+
+	t.Run("成功时返回 nil", func(t *testing.T) {
+		var err error
+		_ = captureStdout(t, func() {
+			err = runWithSpinnerTimeout("正在保存配置...", 5*time.Second, func() error { return nil })
+		})
+		if err != nil {
+			t.Fatalf("expected nil, got %v", err)
+		}
+	})
+}
+
+// TestRunWithSpinnerTimeoutRecoversPanic 防回归：原实现下 task panic 会跳过 done 发送，
+// 动画协程一路画到进程崩溃。
+func TestRunWithSpinnerTimeoutRecoversPanic(t *testing.T) {
+	var err error
+	_ = captureStdout(t, func() {
+		err = runWithSpinnerTimeout("正在保存配置...", 5*time.Second, func() error {
+			panic("kaboom")
+		})
+	})
+	if err == nil {
+		t.Fatal("expected error from panicking task")
+	}
+	if !strings.Contains(err.Error(), "kaboom") {
+		t.Fatalf("expected panic value in error, got %q", err.Error())
+	}
+}
+
+// TestRunWithSpinnerTimeoutClearsLine 防回归：动画协程必须在主协程清行之前真正退出，
+// 否则残帧会被打印在清行之后，屏幕上留下一行不再转动的"正在保存配置..."。
+func TestRunWithSpinnerTimeoutClearsLine(t *testing.T) {
+	out := captureStdout(t, func() {
+		_ = runWithSpinnerTimeout("正在保存配置...", 5*time.Second, func() error {
+			time.Sleep(250 * time.Millisecond) // 让动画至少画几帧
+			return nil
+		})
+	})
+	// 清行序列之后不得再有可见字符
+	idx := strings.LastIndex(out, "\r")
+	if idx < 0 {
+		t.Fatalf("expected carriage returns in spinner output, got %q", out)
+	}
+	if tail := strings.TrimSpace(stripControl(out[idx:])); tail != "" {
+		t.Fatalf("残帧未被清除，清行后仍有可见内容: %q", tail)
+	}
+}
+
+// ==================== saveConfigError ====================
+
+// TestBuildSaveConfigErrorTypedNil 防回归 typed-nil 陷阱：两个子错误都为 nil 时必须返回
+// 无类型 nil。若返回 (*saveConfigError)(nil)，err != nil 会成立，每次成功保存都被判为失败。
+func TestBuildSaveConfigErrorTypedNil(t *testing.T) {
+	if err := buildSaveConfigError(nil, nil); err != nil {
+		t.Fatalf("成功路径必须返回无类型 nil，got %#v（typed-nil 陷阱）", err)
+	}
+}
+
+func TestSaveConfigErrorMessageAndEnvOnly(t *testing.T) {
+	envErr := errors.New("setx 挂了")
+	settingsErr := errors.New("settings 挂了")
+
+	t.Run("仅 env 失败", func(t *testing.T) {
+		err := buildSaveConfigError(envErr, nil)
+		var sce *saveConfigError
+		if !errors.As(err, &sce) {
+			t.Fatalf("expected *saveConfigError, got %T", err)
+		}
+		if !sce.envOnly() {
+			t.Fatal("expected envOnly()=true —— 这是'跳过系统环境变量'选项出现的前提")
+		}
+		if !strings.Contains(err.Error(), "系统环境变量写入失败") || strings.Contains(err.Error(), "settings.json 写入失败") {
+			t.Fatalf("unexpected message: %q", err.Error())
+		}
+	})
+
+	t.Run("两者都失败时不得提供跳过", func(t *testing.T) {
+		err := buildSaveConfigError(envErr, settingsErr)
+		var sce *saveConfigError
+		if !errors.As(err, &sce) {
+			t.Fatalf("expected *saveConfigError, got %T", err)
+		}
+		if sce.envOnly() {
+			t.Fatal("settings.json 也失败时不能声称'仅 settings.json 生效'")
+		}
+		if !strings.Contains(err.Error(), "；") {
+			t.Fatalf("expected both failures joined, got %q", err.Error())
+		}
+	})
+
+	t.Run("超时能穿透 Unwrap 被 errors.Is 命中", func(t *testing.T) {
+		err := buildSaveConfigError(fmt.Errorf("wrap: %w", errCommandTimeout), nil)
+		if !errors.Is(err, errCommandTimeout) {
+			t.Fatalf("errors.Is 未能穿透 saveConfigError: %v", err)
+		}
+	})
+}
+
+// TestRunWithSpinnerTimeoutShowsElapsed 验证动画在超过阈值后显示已耗时——
+// 这正是用户"看不出程序还在不在动"的痛点：慢和卡死必须能一眼分开。
+func TestRunWithSpinnerTimeoutShowsElapsed(t *testing.T) {
+	orig := spinnerElapsedThreshold
+	spinnerElapsedThreshold = 100 * time.Millisecond
+	defer func() { spinnerElapsedThreshold = orig }()
+
+	out := captureStdout(t, func() {
+		_ = runWithSpinnerTimeout("正在保存配置...", 30*time.Second, func() error {
+			time.Sleep(500 * time.Millisecond)
+			return nil
+		})
+	})
+	// 不写死秒数：机器负载会影响阈值后第一帧落在第几秒
+	if !regexp.MustCompile(`正在保存配置\.\.\. \(\d+s\)`).MatchString(out) {
+		t.Fatalf("动画未显示已耗时，输出: %q", stripControl(out))
+	}
+}
+
+// ==================== 保存失败处置菜单 ====================
+
+// TestBuildSaveFailureMenu 覆盖用户在规划阶段亲自选定的行为：超时后能拿到「重试 / 跳过 / 退出」。
+// 关键在于两个条件分支——spinner 兜底超时时不得提供「重试」（task 已被遗弃且仍在后台写文件），
+// settings.json 也失败时不得提供「跳过」（那样等于承诺一份并不存在的可用配置）。
+func TestBuildSaveFailureMenu(t *testing.T) {
+	spinnerTimeout := fmt.Errorf("正在保存配置: %w", errSpinnerTimeout)
+	envOnlyErr := buildSaveConfigError(errors.New("setx 挂了"), nil)
+	bothErr := buildSaveConfigError(errors.New("setx 挂了"), errors.New("settings 挂了"))
+
+	cases := []struct {
+		name      string
+		err       error
+		allowSkip bool
+		want      []saveFailureAction
+	}{
+		{"命令超时+允许跳过=重试/跳过/退出", envOnlyErr, true,
+			[]saveFailureAction{saveActionRetry, saveActionSkipEnv, saveActionAbort}},
+		{"命令超时+不允许跳过=重试/退出", envOnlyErr, false,
+			[]saveFailureAction{saveActionRetry, saveActionAbort}},
+		{"两侧都失败=不给跳过", bothErr, true,
+			[]saveFailureAction{saveActionRetry, saveActionAbort}},
+		{"spinner兜底超时=只剩退出", spinnerTimeout, true,
+			[]saveFailureAction{saveActionAbort}},
+		{"普通错误+允许跳过=不给跳过", errors.New("其他失败"), true,
+			[]saveFailureAction{saveActionRetry, saveActionAbort}},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			items, actions := buildSaveFailureMenu(c.err, c.allowSkip)
+			if len(items) != len(actions) {
+				t.Fatalf("items(%d) 与 actions(%d) 必须一一对应", len(items), len(actions))
+			}
+			if len(actions) != len(c.want) {
+				t.Fatalf("actions = %v, want %v", actions, c.want)
+			}
+			for i := range c.want {
+				if actions[i] != c.want[i] {
+					t.Fatalf("actions[%d] = %v, want %v（完整: %v）", i, actions[i], c.want[i], actions)
+				}
+				// 菜单键必须是 1-based 连续编号，runItemMenu 的降级数字输入分支依赖它
+				if items[i].Key != strconv.Itoa(i+1) {
+					t.Fatalf("items[%d].Key = %q, want %q", i, items[i].Key, strconv.Itoa(i+1))
+				}
+			}
+		})
+	}
+}
+
+// TestSaveSpinnerTimeoutCoversCommandBudget 防回归：spinner 兜底必须大于同一路径上
+// 命令级超时之和的上界，否则慢（而非卡死）的保存会先撞 spinner 超时，而那条路径上
+// 「重试」和「跳过」都不可用，用户白输一遍配置。
+func TestSaveSpinnerTimeoutCoversCommandBudget(t *testing.T) {
+	// Windows 最坏：每个受管变量 setx + REG QUERY 两个进程
+	worst := time.Duration(2*len(allEnvVarKeys)) * defaultCommandTimeout
+	if saveSpinnerTimeout <= worst {
+		t.Fatalf("saveSpinnerTimeout=%v 未覆盖命令级预算上界 %v", saveSpinnerTimeout, worst)
+	}
+}
+
+// ==================== VSCode settings.json 交互移出 spinner ====================
+
+// TestSaveVSCodeConfigInvalidJSONReturnsSentinel 防回归本次修复的首要目标：
+// saveVSCodeConfig 曾在这条分支里直接 styledConfirm 读键盘，而它被包在 spinner 内——
+// 动画每 80ms 重绘会把菜单冲掉，程序停在 os.Stdin.Read 上等一个看不见的按键。
+// 现在它必须只返回哨兵错误，把询问留给 spinner 外的调用方。
+func TestSaveVSCodeConfigInvalidJSONReturnsSentinel(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
+	t.Setenv(envAgentTeams, "")
+	t.Setenv(envEffortLevel, "")
+
+	settingsPath, err := getVSCodeSettingsPath()
+	if err != nil {
+		t.Fatalf("getVSCodeSettingsPath: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(settingsPath, []byte("{ this is not json"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := Config{BaseURL: "https://example.com", AuthToken: "sk-test", Model: "claude-opus-5"}
+
+	// 把 stdin 换成空文件：若实现里还残留 styledConfirm 之类的读键盘调用，
+	// 它会立刻读到 EOF 而不是挂起，测试仍能跑完——但真正的保障是下面的哨兵断言。
+	origStdin := os.Stdin
+	devNull, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdin = devNull
+	defer func() { os.Stdin = origStdin; devNull.Close() }()
+
+	saveErr := saveVSCodeConfig(cfg)
+	if !errors.Is(saveErr, errVSCodeSettingsInvalid) {
+		t.Fatalf("expected errVSCodeSettingsInvalid, got %v", saveErr)
+	}
+
+	// 原文件必须原封不动（重建只能在用户确认后发生）
+	raw, _ := os.ReadFile(settingsPath)
+	if string(raw) != "{ this is not json" {
+		t.Fatalf("saveVSCodeConfig 不该在未确认时改写原文件，现内容: %q", string(raw))
+	}
+	if _, err := os.Stat(settingsPath + ".bak"); err == nil {
+		t.Fatal("saveVSCodeConfig 不该在未确认时产生备份")
+	}
+}
+
+func TestRebuildVSCodeConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
+	t.Setenv(envAgentTeams, "")
+	t.Setenv(envEffortLevel, "")
+
+	settingsPath, err := getVSCodeSettingsPath()
+	if err != nil {
+		t.Fatalf("getVSCodeSettingsPath: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(settingsPath, []byte("{ this is not json"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := Config{BaseURL: "https://example.com", AuthToken: "sk-test", Model: "claude-opus-5"}
+	backupPath, err := rebuildVSCodeConfig(cfg)
+	if err != nil {
+		t.Fatalf("rebuildVSCodeConfig: %v", err)
+	}
+	if backupPath != settingsPath+".bak" {
+		t.Fatalf("backupPath = %q, want %q", backupPath, settingsPath+".bak")
+	}
+	if raw, err := os.ReadFile(backupPath); err != nil || string(raw) != "{ this is not json" {
+		t.Fatalf("备份内容不对: err=%v raw=%q", err, string(raw))
+	}
+
+	raw, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatalf("重建后的 settings.json 不是合法 JSON: %v", err)
+	}
+	if _, ok := m[vscodeEnvKey]; !ok {
+		t.Fatalf("重建后缺少 %s 键: %v", vscodeEnvKey, m)
 	}
 }

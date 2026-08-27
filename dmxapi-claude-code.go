@@ -6,6 +6,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -359,29 +360,108 @@ func printInfo(text string) {
 	fmt.Printf("%s%s%s%s %s\n", colorReset, colorBrightCyan, iconInfo, colorReset, text)
 }
 
-// runWithSpinner 带旋转动画执行任务
+// defaultSpinnerTimeout 是一般 spinner 任务（纯文件读写）的兜底时间上界。
+// 这层兜底专治命令级超时够不着的阻塞：exec.LookPath 扫描失效网络盘（LookPath 在
+// exec.Command 构造时就执行，ctx 保护不到）、writeFileAtomic 的 tmp.Sync() 卡在网络 home 等。
+const defaultSpinnerTimeout = 300 * time.Second
+
+// saveSpinnerTimeout 是保存/应用配置这类会串行启动大量子进程的任务的兜底上界。
+//
+// 它必须**大于**该路径上命令级超时之和的上界，否则 spinner 会先于命令层触发，把一次
+// 只是慢（而非卡死）的保存判成超时——而 spinner 超时会遗弃 task goroutine，导致
+// "重试"与"跳过"都不能给（见 runSaveWithRetry），用户白输一遍配置还落下半套写入。
+// Windows 最坏：每个受管变量走 setx + REG QUERY 两个进程，applyNamedConfig 再叠加
+// 两次 removeManagedEnvVar（各 powershell + REG DELETE + REG QUERY）与 attribution 写入，
+// 故按 2×(变量数+3) 个命令 × defaultCommandTimeout 估算。
+// 正常保存只需几秒，这个上界只在真正的无限阻塞时才会走到。
+var saveSpinnerTimeout = time.Duration(2*(len(allEnvVarKeys)+3)) * defaultCommandTimeout
+
+// spinnerElapsedThreshold 是开始在动画里显示已耗时的阈值。让用户能区分"慢"和"卡死"。
+// 用 var 而非 const 以便测试临时调小，避免为验证这一行为让测试真跑满 3 秒。
+var spinnerElapsedThreshold = 3 * time.Second
+
+// errSpinnerTimeout 标记"spinner 任务超过兜底时间上界仍未返回"。
+// 注意：Go 无法强杀 goroutine，返回此错误时 task 仍在后台运行——调用方据此禁用"重试"，
+// 否则两次 task 会并发写同一份 settings.json 与同一批系统环境变量。
+var errSpinnerTimeout = errors.New("操作超时")
+
+// runWithSpinner 带旋转动画执行任务（使用默认兜底超时）
 func runWithSpinner(message string, task func() error) error {
-	done := make(chan bool, 1) // 带缓冲，防止 task panic 时 goroutine 阻塞
-	var err error
+	return runWithSpinnerTimeout(message, defaultSpinnerTimeout, task)
+}
+
+// runWithSpinnerTimeout 带旋转动画执行任务，并对任务施加兜底超时。
+//
+// task 在独立 goroutine 中运行并 recover panic（原实现里 task panic 会跳过 done 发送，
+// 动画 goroutine 一路画到进程崩溃，与那句"带缓冲防止 task panic"的注释并不相符）。
+// 动画停止用 stop/stopped 一对 channel 严格握手：主协程必须等动画协程真正退出后才清行，
+// 否则动画可能恰好被抢占在 Printf 之前，清行先执行、残帧后打印，屏幕上留下一行不再转动的
+// "正在保存配置..."——任务其实已经成功，看起来却像卡死。
+func runWithSpinnerTimeout(message string, timeout time.Duration, task func() error) error {
+	stop := make(chan struct{})
+	stopped := make(chan struct{})
+	maxWidth := make(chan int, 1)
+	start := time.Now()
 
 	go func() {
 		i := 0
+		width := 0
+		// 把打印过的最大可见宽度交给主协程用于清行，再宣告动画已停：
+		// 主协程 <-stopped 之后读 maxWidth 一定拿得到最终值。
+		defer func() {
+			maxWidth <- width
+			close(stopped)
+		}()
 		for {
 			select {
-			case <-done:
+			case <-stop:
 				return
 			default:
-				fmt.Printf("\r  %s%s%s %s%s%s", styleBold+colorBrightCyan, spinnerFrames[i], colorReset, colorBrightWhite, message, colorReset)
-				i = (i + 1) % len(spinnerFrames)
-				time.Sleep(80 * time.Millisecond)
+			}
+
+			text := message
+			if elapsed := time.Since(start); elapsed >= spinnerElapsedThreshold {
+				text = fmt.Sprintf("%s (%ds)", message, int(elapsed.Seconds()))
+			}
+			if w := visibleLength(text) + 4; w > width { // 2 空格 + 1 帧字符 + 1 空格
+				width = w
+			}
+			fmt.Printf("\r  %s%s%s %s%s%s", styleBold+colorBrightCyan, spinnerFrames[i], colorReset, colorBrightWhite, text, colorReset)
+			i = (i + 1) % len(spinnerFrames)
+
+			select {
+			case <-stop:
+				return
+			case <-time.After(80 * time.Millisecond):
 			}
 		}
 	}()
 
-	err = task()
-	done <- true
+	taskDone := make(chan error, 1) // 带缓冲：超时遗弃 task 后它仍能无阻塞地写回结果
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				taskDone <- fmt.Errorf("任务执行异常: %v", r)
+			}
+		}()
+		taskDone <- task()
+	}()
 
-	clearLen := visibleLength(message) + 6
+	var err error
+	select {
+	case err = <-taskDone:
+	case <-time.After(timeout):
+		err = fmt.Errorf("%s（已等待 %.0f 秒仍未完成，后台操作可能仍在进行，建议重启本程序后重试）: %w",
+			strings.TrimSuffix(message, "..."), timeout.Seconds(), errSpinnerTimeout)
+	}
+
+	close(stop)
+	<-stopped
+
+	clearLen := <-maxWidth
+	if clearLen < visibleLength(message)+4 {
+		clearLen = visibleLength(message) + 4
+	}
 	fmt.Print("\r" + strings.Repeat(" ", clearLen) + "\r")
 	return err
 }
@@ -1417,11 +1497,25 @@ func setUserEnv(key, value string) error {
 }
 
 func getUserEnv(key string) (string, bool, error) {
-	cmd := exec.Command("REG", "QUERY", `HKCU\Environment`, "/V", key)
-	output, err := cmd.CombinedOutput()
+	output, err := execCombinedWithTimeout(defaultCommandTimeout, "REG", "QUERY", `HKCU\Environment`, "/V", key)
+	return classifyRegQueryResult(key, output, err)
+}
+
+// classifyRegQueryResult 把一次 REG QUERY 的结果分类为「取到值 / 变量不存在 / 出错」。
+// 抽成平台无关的纯函数是为了能在任意平台上表驱动测试下面这个 Windows 专属陷阱：
+//
+//	Windows 的 os.Process.Kill 实现是 TerminateProcess(handle, 1)，被超时杀掉的子进程
+//	退出码恰好是 1——与 REG QUERY 用来表示「变量不存在」的退出码完全相同。
+//	所以必须先判 errCommandTimeout 再判 ExitCode，否则超时会被误报成「变量未写入」，
+//	把用户的排查方向彻底带偏。这个撞车在 Unix 上复现不出来（那里 Kill 后 ExitCode 是 -1）。
+func classifyRegQueryResult(key string, output []byte, err error) (string, bool, error) {
 	if err != nil {
+		if errors.Is(err, errCommandTimeout) {
+			return "", false, err
+		}
 		// REG QUERY 退出码 1 = 变量不存在（不依赖文字，兼容所有系统语言和编码）
-		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
 			return "", false, nil
 		}
 		trimmed := strings.TrimSpace(string(output))
@@ -2369,8 +2463,9 @@ func winPathToWSL(winPath string) string {
 // 优先调用 cmd.exe；失败时回退到扫描 /mnt/c/Users/ 中的第一个非系统用户目录。
 func getWindowsHomeFromWSL() string {
 	// 方法1：调用 cmd.exe /c echo %USERPROFILE%
-	cmd := exec.Command("cmd.exe", "/c", "echo %USERPROFILE%")
-	if out, err := cmd.Output(); err == nil {
+	// 只取 stdout：WSL 下 cmd.exe 常往 stderr 打 "UNC paths are not supported" 警告，
+	// 合并输出会让 winPathToWSL 拿到的第一行不再是 Windows 路径。
+	if out, err := execOutputWithTimeout(defaultCommandTimeout, "cmd.exe", "/c", "echo %USERPROFILE%"); err == nil {
 		if p := winPathToWSL(string(out)); p != "" {
 			return p
 		}
@@ -2418,8 +2513,18 @@ func getVSCodeSettingsPath() (string, error) {
 	return path, nil
 }
 
+// errVSCodeSettingsInvalid 标记"VSCode settings.json 不是合法 JSON，需要用户确认是否备份重建"。
+//
+// 这个哨兵错误的存在是为了让询问发生在 spinner **外面**。原先 saveVSCodeConfig 直接在函数内
+// 调 styledConfirm 读键盘，而它被包在 runWithSpinner 里——动画每 80ms 用 \r 重绘同一行，
+// 会把确认菜单整个冲掉，程序停在 os.Stdin.Read 上等一个用户看不见的按键，表现为永远转的动画。
+// 引入 spinner 兜底超时后更不能留：被超时遗弃的 task 仍持有 raw mode 与 stdin，
+// 会和随后的 runItemMenu 抢同一个 fd。
+var errVSCodeSettingsInvalid = errors.New("VSCode settings.json 不是合法 JSON")
+
 // saveVSCodeConfig 将 cfg 写入 VSCode settings.json 的 claudeCode.environmentVariables。
-// 若文件不存在则自动创建；若 JSON 解析失败则询问用户是否备份重建。
+// 若文件不存在则自动创建；若 JSON 解析失败则返回 errVSCodeSettingsInvalid，
+// 由调用方在 spinner 结束后询问用户，确认后调 rebuildVSCodeConfig。
 func saveVSCodeConfig(cfg Config) error {
 	settingsPath, err := getVSCodeSettingsPath()
 	if err != nil {
@@ -2437,28 +2542,70 @@ func saveVSCodeConfig(cfg Config) error {
 		existingJSON = data
 	}
 
-	agentTeamsVal := getManagedAgentTeamsValue()
-	envVars := buildVSCodeEnvVars(cfg, agentTeamsVal)
+	envVars := buildVSCodeEnvVars(cfg, getManagedAgentTeamsValue())
 
 	merged, err := mergeVSCodeSettings(existingJSON, envVars)
 	if err != nil {
-		// JSON 解析失败：询问是否备份重建
-		printError(fmt.Sprintf("settings.json 解析失败: %v", err))
-		if ok, _ := styledConfirm("是否备份原文件并重新创建", false); !ok {
-			return fmt.Errorf("用户取消：保留原文件，跳过写入")
-		}
-		backupPath := settingsPath + ".bak"
-		if berr := os.Rename(settingsPath, backupPath); berr != nil {
-			return fmt.Errorf("备份失败: %v", berr)
-		}
-		printInfo(fmt.Sprintf("原文件已备份至: %s", backupPath))
-		merged, err = mergeVSCodeSettings([]byte("{}"), envVars)
-		if err != nil {
-			return err
-		}
+		return fmt.Errorf("%w（%v）", errVSCodeSettingsInvalid, err)
 	}
 
 	return writeFileAtomic(settingsPath, merged, 0644)
+}
+
+// rebuildVSCodeConfig 备份原 settings.json 后按空对象重建并写入受管环境变量。
+// 仅在用户确认后由调用方调用（对应 saveVSCodeConfig 返回 errVSCodeSettingsInvalid 的场景）。
+// 返回备份文件路径。
+func rebuildVSCodeConfig(cfg Config) (string, error) {
+	settingsPath, err := getVSCodeSettingsPath()
+	if err != nil {
+		return "", err
+	}
+
+	backupPath := settingsPath + ".bak"
+	if err := os.Rename(settingsPath, backupPath); err != nil {
+		return "", fmt.Errorf("备份失败: %v", err)
+	}
+
+	merged, err := mergeVSCodeSettings([]byte("{}"), buildVSCodeEnvVars(cfg, getManagedAgentTeamsValue()))
+	if err != nil {
+		return "", err
+	}
+	if err := writeFileAtomic(settingsPath, merged, 0644); err != nil {
+		return "", err
+	}
+	return backupPath, nil
+}
+
+// saveVSCodeConfigInteractive 带动画写入 VSCode 配置；settings.json 解析失败时
+// 在 spinner **结束后**询问用户是否备份重建，确认后再带动画重建。
+// 返回备份路径（未发生备份时为空）与最终错误。
+func saveVSCodeConfigInteractive(cfg Config, message string) (string, error) {
+	err := runWithSpinner(message, func() error {
+		return saveVSCodeConfig(cfg)
+	})
+	if !errors.Is(err, errVSCodeSettingsInvalid) {
+		return "", err // 含 err == nil 的成功路径
+	}
+
+	printError(err.Error())
+	if ok, _ := styledConfirm("是否备份原文件并重新创建", false); !ok {
+		return "", fmt.Errorf("用户取消：保留原文件，跳过写入")
+	}
+
+	// 备份路径由 task 回传，避免在 spinner 之外再解析一次 VSCode 路径——
+	// getVSCodeSettingsPath 在 WSL 下会调 cmd.exe，那一步没有动画就是一段静止的黑屏。
+	backup := make(chan string, 1)
+	if err := runWithSpinner(message, func() error {
+		p, rerr := rebuildVSCodeConfig(cfg)
+		if rerr != nil {
+			return rerr
+		}
+		backup <- p
+		return nil
+	}); err != nil {
+		return "", err
+	}
+	return <-backup, nil
 }
 
 // clearVSCodeConfig 从 VSCode settings.json 中移除本工具写入的配置键。
@@ -2645,8 +2792,7 @@ func clearWindowsRegistryFromWSLViaPowerShell(psExe string) clearResult {
 			`if ([Environment]::GetEnvironmentVariable('%s', 'User') -ne $null) { [Environment]::SetEnvironmentVariable('%s', $null, 'User'); Write-Output 'REMOVED' } else { Write-Output 'ABSENT' }`,
 			psKey, psKey,
 		)
-		cmd := exec.Command(psExe, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script)
-		output, err := cmd.CombinedOutput()
+		output, err := execCombinedWithTimeout(defaultCommandTimeout, psExe, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script)
 		if err != nil {
 			failures = append(failures, fmt.Sprintf("%s: %s", key, strings.TrimSpace(string(output))))
 			continue
@@ -2676,15 +2822,21 @@ func clearWindowsRegistryFromWSLViaReg(regExe string) clearResult {
 	var failures []string
 	removed := 0
 	for _, key := range allEnvVarKeys {
-		delCmd := exec.Command(regExe, "DELETE", `HKCU\Environment`, "/V", key, "/F")
-		output, err := delCmd.CombinedOutput()
+		output, err := execCombinedWithTimeout(defaultCommandTimeout, regExe, "DELETE", `HKCU\Environment`, "/V", key, "/F")
 		if err == nil {
 			removed++
 			continue
 		}
-		queryCmd := exec.Command(regExe, "QUERY", `HKCU\Environment`, "/V", key)
-		if queryErr := queryCmd.Run(); queryErr != nil {
-			// QUERY 也失败：变量确实已不存在，视为幂等成功
+		// 用 classifyRegQueryResult 而不是"QUERY 也失败就当成已删除"：REG QUERY 超时同样会失败，
+		// 直接吞掉会把一次没删掉的 ANTHROPIC_AUTH_TOKEN 报成"清除成功"，留下残留凭据。
+		queryOut, queryErr := execCombinedWithTimeout(defaultCommandTimeout, regExe, "QUERY", `HKCU\Environment`, "/V", key)
+		_, exists, classifyErr := classifyRegQueryResult(key, queryOut, queryErr)
+		if classifyErr != nil {
+			failures = append(failures, fmt.Sprintf("%s: 删除后无法校验（%v）", key, classifyErr))
+			continue
+		}
+		if !exists {
+			// 变量确实已不存在：DELETE 的非零退出码是"本来就没有"，幂等成功
 			continue
 		}
 		failures = append(failures, fmt.Sprintf("%s: %s", key, strings.TrimSpace(string(output))))
@@ -2713,8 +2865,7 @@ func clearFishUniversalVariables() clearResult {
 	removed := 0
 	for _, key := range allEnvVarKeys {
 		// set -Ue KEY：erase universal variable
-		cmd := exec.Command(fishExe, "-c", fmt.Sprintf("set -Ue %s", key))
-		if output, err := cmd.CombinedOutput(); err == nil {
+		if output, err := execCombinedWithTimeout(defaultCommandTimeout, fishExe, "-c", fmt.Sprintf("set -Ue %s", key)); err == nil {
 			removed++
 		} else {
 			trimmed := strings.TrimSpace(string(output))
@@ -2972,12 +3123,13 @@ func configureVSCode(cfg Config, exitOnDone, allowBack bool) (back bool) {
 	}
 
 	fmt.Println()
-	err = runWithSpinner("正在写入 VSCode 配置...", func() error {
-		return saveVSCodeConfig(cfg)
-	})
+	backupPath, err := saveVSCodeConfigInteractive(cfg, "正在写入 VSCode 配置...")
 	if err != nil {
 		printError(fmt.Sprintf("写入失败: %v", err))
 	} else {
+		if backupPath != "" {
+			printInfo(fmt.Sprintf("原文件已备份至: %s", backupPath))
+		}
 		printSuccess("VSCode 配置写入成功!")
 		printInfo(fmt.Sprintf("文件路径: %s", settingsPath))
 		if isWSL() {
@@ -3055,8 +3207,7 @@ func removeUserEnv(key string) error {
 		}
 	}
 	// PowerShell 不可用时回退到 REG DELETE（不会自动广播，需要手工通知）
-	cmd := exec.Command("REG", "DELETE", `HKCU\Environment`, "/V", key, "/F")
-	output, err := cmd.CombinedOutput()
+	output, err := execCombinedWithTimeout(defaultCommandTimeout, "REG", "DELETE", `HKCU\Environment`, "/V", key, "/F")
 	if err == nil {
 		broadcastEnvironmentChange()
 		return nil
@@ -3085,10 +3236,69 @@ func isWSL() bool {
 	return wslContentMatches(string(data))
 }
 
-// runCommand 执行命令
+// ==================== 外部命令执行（带超时）====================
+
+const (
+	// defaultCommandTimeout 单条外部命令的时间上界。取 30s 而非更短，是因为 Windows
+	// PowerShell 冷启动在装了 EDR/杀软的机器上 5~15s 属常态——超时的目的是"防永久卡死"，
+	// 不是"快速失败"，宁可等久一点也不要把慢但能成的调用判成失败。
+	defaultCommandTimeout = 30 * time.Second
+
+	// commandWaitDelay 是 ctx 取消后等待子进程收尾的宽限期。Go 1.20+ 的 WaitDelay 专治
+	// "子进程已退出但其孙进程仍继承着 stdout/stderr 管道，导致 Wait 永不返回"这一经典 hang。
+	commandWaitDelay = 2 * time.Second
+)
+
+// errCommandTimeout 标记"外部命令超过时间上界未返回"。用哨兵错误而非依赖退出码，
+// 是因为退出码在 Windows 上会与业务语义撞车（见 classifyRegQueryResult）。
+var errCommandTimeout = errors.New("外部命令执行超时")
+
+// execWithTimeout 是带超时的外部命令执行核心。combined=true 时合并 stdout+stderr，
+// 否则只取 stdout（cmd.exe 之类会往 stderr 打警告的命令必须只取 stdout，否则污染解析）。
+//
+// 两条不可动摇的实现约束：
+//  1. 超时判定只看 ctx.Err()。exec.Cmd.Wait 在 ctx 取消后会用被 Kill 的 *ExitError 覆盖掉
+//     context.DeadlineExceeded，errors.Is(err, context.DeadlineExceeded) 恒为 false。
+//  2. exec.ErrWaitDelay 视为成功。它表示命令本身已正常退出、只是管道被 WaitDelay 关闭。
+func execWithTimeout(timeout time.Duration, combined bool, name string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.WaitDelay = commandWaitDelay
+
+	var output []byte
+	var err error
+	if combined {
+		output, err = cmd.CombinedOutput()
+	} else {
+		output, err = cmd.Output()
+	}
+
+	// err != nil 是必要条件：ctx 超时杀掉进程后 Wait 一定给出 *ExitError，所以真超时不会漏判；
+	// 反过来若命令在 deadline 前一瞬拿到了完整输出并成功退出，就不该因为随后 deadline 到期而被误报。
+	if err != nil && ctx.Err() != nil {
+		return output, fmt.Errorf("执行 %s 超过 %s 仍未返回（可能被安全软件拦截或系统繁忙）: %w", name, timeout, errCommandTimeout)
+	}
+	if errors.Is(err, exec.ErrWaitDelay) {
+		err = nil
+	}
+	return output, err
+}
+
+// execCombinedWithTimeout 带超时执行命令并返回 stdout+stderr 合并输出。
+func execCombinedWithTimeout(timeout time.Duration, name string, args ...string) ([]byte, error) {
+	return execWithTimeout(timeout, true, name, args...)
+}
+
+// execOutputWithTimeout 带超时执行命令并只返回 stdout。
+func execOutputWithTimeout(timeout time.Duration, name string, args ...string) ([]byte, error) {
+	return execWithTimeout(timeout, false, name, args...)
+}
+
+// runCommand 执行命令（带默认超时），错误信息中包含命令的合并输出
 func runCommand(name string, args ...string) error {
-	cmd := exec.Command(name, args...)
-	output, err := cmd.CombinedOutput()
+	output, err := execCombinedWithTimeout(defaultCommandTimeout, name, args...)
 	if err == nil {
 		return nil
 	}
@@ -4303,6 +4513,138 @@ func configureModels(cfg *Config, allowBack bool) bool {
 	return false
 }
 
+// saveConfigError 区分保存配置时两个独立目标的失败，供上层决定能否给出
+// "跳过系统环境变量、仅 settings.json 生效"这一处置选项。
+type saveConfigError struct {
+	envErr      error // 系统环境变量（Windows 注册表 / Unix shell profile）写入失败
+	settingsErr error // Claude settings.json 写入失败
+}
+
+func (e *saveConfigError) Error() string {
+	var parts []string
+	if e.envErr != nil {
+		parts = append(parts, fmt.Sprintf("系统环境变量写入失败: %v", e.envErr))
+	}
+	if e.settingsErr != nil {
+		parts = append(parts, fmt.Sprintf("Claude settings.json 写入失败: %v", e.settingsErr))
+	}
+	return strings.Join(parts, "；")
+}
+
+// Unwrap 让 errors.Is / errors.As 能穿透到**两侧**的底层哨兵错误（如 errCommandTimeout）。
+// 返回切片而非单个 error：两个子任务可能各自失败，只暴露其中一个会让另一侧的哨兵永远命中不了。
+func (e *saveConfigError) Unwrap() []error {
+	var errs []error
+	if e.envErr != nil {
+		errs = append(errs, e.envErr)
+	}
+	if e.settingsErr != nil {
+		errs = append(errs, e.settingsErr)
+	}
+	return errs
+}
+
+// envOnly 报告是否只有系统环境变量写入失败——此时 settings.json 已成功落盘，
+// Claude Code 读它即可工作，"跳过系统环境变量"是真实可行的选项而非空头承诺。
+func (e *saveConfigError) envOnly() bool {
+	return e != nil && e.envErr != nil && e.settingsErr == nil
+}
+
+// buildSaveConfigError 由两个子任务的错误组装 saveConfig 的返回值。
+//
+// 这个函数存在的唯一理由是隔离 typed-nil 陷阱：直接 `return &saveConfigError{}` 会把一个
+// *saveConfigError 类型的 nil 指针装箱进 error 接口，得到 err != nil，让每次成功保存都被
+// 判为失败并走进"重试/退出"菜单。两个子错误都为 nil 时必须返回无类型 nil。
+func buildSaveConfigError(envErr, settingsErr error) error {
+	if envErr == nil && settingsErr == nil {
+		return nil
+	}
+	return &saveConfigError{envErr: envErr, settingsErr: settingsErr}
+}
+
+// saveFailureAction 是保存失败后用户可选的处置动作。
+// 用枚举而非菜单标签字符串做分发：标签是给人看的文案，改一个字不该悄悄改变控制流。
+type saveFailureAction int
+
+const (
+	saveActionAbort saveFailureAction = iota
+	saveActionRetry
+	saveActionSkipEnv
+)
+
+// buildSaveFailureMenu 根据失败原因组装处置菜单。抽成纯函数以便直接测试各种组合。
+//
+//   - 重试：仅当**不是** spinner 兜底超时时提供。spinner 超时意味着 task goroutine 已被遗弃
+//     且仍在后台跑，此时重试会让两串 setx 交错执行、两次"读→合并→写"争抢同一份
+//     settings.json，静默丢配置。
+//   - 跳过系统环境变量：仅当调用方允许、且失败确实只发生在系统环境变量一侧
+//     （settings.json 已成功落盘）时提供，否则就是空头承诺。
+func buildSaveFailureMenu(err error, allowSkip bool) ([]MenuItem, []saveFailureAction) {
+	var items []MenuItem
+	var actions []saveFailureAction
+
+	add := func(action saveFailureAction, label, desc string) {
+		items = append(items, MenuItem{strconv.Itoa(len(items) + 1), label, desc})
+		actions = append(actions, action)
+	}
+
+	if !errors.Is(err, errSpinnerTimeout) {
+		add(saveActionRetry, "重试保存", "重新执行一次保存")
+	}
+	var sce *saveConfigError
+	if allowSkip && errors.As(err, &sce) && sce.envOnly() {
+		add(saveActionSkipEnv, "跳过系统环境变量", "Claude settings.json 已写入成功，仅它生效即可继续")
+	}
+	add(saveActionAbort, "退出", "放弃本次保存")
+
+	return items, actions
+}
+
+// runSaveWithRetry 带动画执行保存任务；失败时给出「重试 / 跳过系统环境变量 / 退出」处置菜单。
+// 返回 ok=true 表示可以继续后续流程，skipped=true 表示用户选了"跳过系统环境变量"
+// （此时只有 ~/.claude/settings.json 生效，调用方不应宣称完整保存成功）。
+//
+// failLabel 是失败提示里对这件事的称呼（"保存配置" / "应用配置"），与调用点的动画文案对应。
+// allowSkip=false 用于 applyNamedConfig 路径：它在 saveConfig 失败时是 early return，
+// 会跳过 attribution 写入与"关闭语义"清理，此时再说"仅 settings.json 生效"就是假承诺。
+func runSaveWithRetry(message, failLabel string, allowSkip bool, save func() error) (ok bool, skipped bool) {
+	for {
+		err := runWithSpinnerTimeout(message, saveSpinnerTimeout, save)
+		if err == nil {
+			return true, false
+		}
+		printError(fmt.Sprintf("%s失败: %v", failLabel, err))
+		fmt.Println()
+
+		items, actions := buildSaveFailureMenu(err, allowSkip)
+		choice, _ := runItemMenu(failLabel+"失败，如何处理", items, false)
+		if choice < 1 || choice > len(actions) { // 防御：菜单语义变化时宁可退出也不越界
+			return false, false
+		}
+
+		switch actions[choice-1] {
+		case saveActionRetry:
+			fmt.Println()
+			continue
+		case saveActionSkipEnv:
+			printWarning("已跳过系统环境变量写入：配置仅通过 ~/.claude/settings.json 生效，其他终端的环境变量不会更新")
+			return true, true
+		default:
+			return false, false
+		}
+	}
+}
+
+// printSaveOutcome 打印保存结果。用户选了"跳过系统环境变量"时只有一半目标写成了，
+// 再说"保存成功"会误导——那台机器的其他终端并不会拿到新的环境变量。
+func printSaveOutcome(skipped bool) {
+	if skipped {
+		printWarning("已部分保存：Claude settings.json 生效，系统环境变量未写入")
+		return
+	}
+	printSuccess("保存成功!")
+}
+
 // saveConfig 保存配置（同时写入系统环境变量与 Claude settings）。
 func saveConfig(cfg Config) error {
 	vars := buildManagedEnvMap(cfg, getManagedAgentTeamsValue())
@@ -4314,29 +4656,20 @@ func saveConfig(cfg Config) error {
 		}
 	}
 
-	var errs []string
-
 	// 持久化到系统环境变量
+	var envErr error
 	switch runtime.GOOS {
 	case "windows":
-		if err := setEnvVarsWindows(vars); err != nil {
-			errs = append(errs, fmt.Sprintf("系统环境变量写入失败: %v", err))
-		}
+		envErr = setEnvVarsWindows(vars)
 	default:
-		if err := setEnvVarsUnix(vars); err != nil {
-			errs = append(errs, fmt.Sprintf("系统环境变量写入失败: %v", err))
-		}
+		envErr = setEnvVarsUnix(vars)
 	}
 
-	// 同步写入 Claude settings.json
-	if err := saveClaudeSettingsConfig(cfg); err != nil {
-		errs = append(errs, fmt.Sprintf("Claude settings.json 写入失败: %v", err))
-	}
+	// 同步写入 Claude settings.json（即便系统环境变量写入失败也照写，
+	// 这正是"跳过系统环境变量、仅 settings.json 生效"这一处置选项成立的前提）
+	settingsErr := saveClaudeSettingsConfig(cfg)
 
-	if len(errs) > 0 {
-		return fmt.Errorf(strings.Join(errs, "；"))
-	}
-	return nil
+	return buildSaveConfigError(envErr, settingsErr)
 }
 
 // runRecommendedConfig 推荐配置一键流程：只输入 key，其他参数使用 dmxapi 推荐默认值，
@@ -4411,28 +4744,32 @@ func runRecommendedConfig() (back bool) {
 	os.Setenv(envEffortLevel, defaultEffortLevel)
 
 	fmt.Println()
-	err := runWithSpinner("正在保存配置...", func() error {
+	ok, skipped := runSaveWithRetry("正在保存配置...", "保存配置", true, func() error {
 		return saveConfig(cfg)
 	})
-	if err != nil {
-		printError(fmt.Sprintf("保存配置失败: %v", err))
+	if !ok {
 		os.Exit(1)
 	}
-	printSuccess("保存成功!")
+	printSaveOutcome(skipped)
 
 	// 写入 dmxapi 默认 git 署名（顶层 attribution）。此前已注入 effort env，
 	// 本调用内部 buildManagedEnvMap 会幂等重写 env，仅额外叠加 attribution。
-	if err := saveClaudeSettingsConfigWithAttribution(cfg, getManagedAgentTeamsValue(), dmxapiDefaultAttribution()); err != nil {
+	// 包进 spinner：它同样是文件写入，卡住时若连动画都没有，用户看到的是
+	// "保存成功!"之后程序静止，比转圈更难判断死活。
+	if err := runWithSpinner("正在写入 Git 署名...", func() error {
+		return saveClaudeSettingsConfigWithAttribution(cfg, getManagedAgentTeamsValue(), dmxapiDefaultAttribution())
+	}); err != nil {
 		printWarning(fmt.Sprintf("Git 署名写入失败: %v", err))
 	}
 
 	fmt.Println()
-	err = runWithSpinner("正在配置 VSCode 插件...", func() error {
-		return saveVSCodeConfig(cfg)
-	})
+	backupPath, err := saveVSCodeConfigInteractive(cfg, "正在配置 VSCode 插件...")
 	if err != nil {
 		printWarning(fmt.Sprintf("VSCode 配置写入失败: %v", err))
 	} else {
+		if backupPath != "" {
+			printInfo(fmt.Sprintf("原文件已备份至: %s", backupPath))
+		}
 		printSuccess("VSCode 插件配置成功!")
 	}
 
@@ -4903,9 +5240,10 @@ func checkClaudeCodeInstalled() bool {
 			return true
 		}
 	}
-	// 兜底：直接运行 claude --version，命令存在但未在 PATH 中时仍可检测到
-	cmd := exec.Command("claude", "--version")
-	if err := cmd.Run(); err == nil {
+	// 兜底：直接运行 claude --version，命令存在但未在 PATH 中时仍可检测到。
+	// 这是启动自检，不在任何 spinner 内——若无超时地卡住，用户看到的是"停在 Logo 之后"，
+	// 连转圈都没有，只能靠命令级超时兜住。
+	if _, err := execCombinedWithTimeout(defaultCommandTimeout, "claude", "--version"); err == nil {
 		return true
 	}
 	return false
@@ -5292,17 +5630,19 @@ func runFromScratchConfig(name string) (back bool) {
 
 			// 保存配置（带动画）
 			fmt.Println()
-			err := runWithSpinner("正在保存配置...", func() error {
+			ok, skipped := runSaveWithRetry("正在保存配置...", "保存配置", true, func() error {
 				return saveConfig(cfg)
 			})
-			if err != nil {
-				printError(fmt.Sprintf("保存配置失败: %v", err))
+			if !ok {
 				os.Exit(1)
 			}
-			printSuccess("保存成功!")
+			printSaveOutcome(skipped)
 
 			// 写入 git 署名（顶层 attribution）。saveConfig 已落定 env，此处叠加 attribution。
-			if err := saveClaudeSettingsConfigWithAttribution(cfg, getManagedAgentTeamsValue(), attr); err != nil {
+			// 同样包进 spinner，避免"保存成功!"之后无动画地静止（见 runRecommendedConfig 同处注释）。
+			if err := runWithSpinner("正在写入 Git 署名...", func() error {
+				return saveClaudeSettingsConfigWithAttribution(cfg, getManagedAgentTeamsValue(), attr)
+			}); err != nil {
 				printWarning(fmt.Sprintf("Git 署名写入失败: %v", err))
 			}
 
@@ -5401,10 +5741,11 @@ func manageNamedConfig(nc NamedConfig) (back bool) {
 	switch choice {
 	case 1:
 		fmt.Println()
-		if err := runWithSpinner("正在应用配置...", func() error {
+		// allowSkip=false：applyNamedConfig 在 saveConfig 失败时 early return，
+		// 会跳过 attribution 写入与"关闭语义"清理，说"仅 settings.json 生效"是假承诺。
+		if ok, _ := runSaveWithRetry("正在应用配置...", "应用配置", false, func() error {
 			return applyNamedConfig(nc)
-		}); err != nil {
-			printError(fmt.Sprintf("应用配置失败: %v", err))
+		}); !ok {
 			return false
 		}
 		printSuccess("应用成功!")
@@ -5515,11 +5856,11 @@ func editNamedConfig(nc NamedConfig) {
 		}
 
 		// 应用使其生效（内部含 saveConfig + 关闭语义清理）
+		// allowSkip=false 的理由同上：applyNamedConfig 是 early return。
 		fmt.Println()
-		if err := runWithSpinner("正在保存配置...", func() error {
+		if ok, _ := runSaveWithRetry("正在保存配置...", "保存配置", false, func() error {
 			return applyNamedConfig(newNC)
-		}); err != nil {
-			printError(fmt.Sprintf("保存配置失败: %v", err))
+		}); !ok {
 			return
 		}
 		printSuccess("保存成功!")
