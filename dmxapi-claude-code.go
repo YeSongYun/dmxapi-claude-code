@@ -5405,16 +5405,23 @@ func fetchLatestVersion() string {
 	if resp.StatusCode != 200 {
 		return ""
 	}
-	// 读取前 256KB，tagRef 数据位于约 142KB 处，需留足余量
-	lr := io.LimitReader(resp.Body, 262144)
+	// 读取前 1MB：页面约 268KB，第一条附件下载路径位于约 175KB 处，需留足余量
+	lr := io.LimitReader(resp.Body, 1<<20)
 	data, err := io.ReadAll(lr)
 	if err != nil {
 		return ""
 	}
-	body := string(data)
+	return parseLatestVersion(string(data))
+}
 
-	// CNB releases 页面为 SSR，tagRef 按发布时间倒序，第一条即最新版
-	re := regexp.MustCompile(`"tagRef":"refs/tags/(v\d+\.\d+\.\d+)"`)
+// parseLatestVersion 从 CNB releases 页面（SSR）中解析最新版本号（不含 v 前缀），解析失败返回空字符串。
+// 页面内嵌的 release 列表按发布时间倒序，第一条附件下载路径中的版本号即最新版。
+// 原先匹配的 "tagRef" 已被 CNB 改名为 "tag_ref"；这里改认附件路径而非 tag_ref：
+// tag_ref 在 Release 创建时就出现、早于附件上传，会提示一个暂时（上传失败时则一直）没有附件的版本。
+// 正则锚定在 JSON 的 "path" 字段与本仓库路径上：发布说明正文也会渲染进页面且排在更前面，
+// 其中出现的下载链接（如第三方工具的 releases/download 地址）不能被误当成最新版。
+func parseLatestVersion(body string) string {
+	re := regexp.MustCompile(`"path":"/dmxapi/dmxapi_claude_code/-/releases/download/(v\d+\.\d+\.\d+)/`)
 	match := re.FindStringSubmatch(body)
 	if len(match) < 2 {
 		return ""

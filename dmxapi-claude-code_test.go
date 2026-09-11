@@ -45,6 +45,42 @@ func TestCompareVersions(t *testing.T) {
 	}
 }
 
+func TestParseLatestVersion(t *testing.T) {
+	// release 按 CNB releases 页面内嵌 JSON 的结构拼出一个 release 对象（tag_ref → body → assets）；
+	// 版本号用合成值，避免与真实发布号耦合
+	release := func(ver, body string, withAsset bool) string {
+		asset := ""
+		if withAsset {
+			asset = `{"id":"1","path":"/dmxapi/dmxapi_claude_code/-/releases/download/` + ver +
+				`/dmxapi-claude-code-` + ver + `-macos-arm64","name":"dmxapi-claude-code-` + ver + `-macos-arm64"}`
+		}
+		return `{"id":"1","tag_ref":"refs/tags/` + ver + `","body":"` + body + `","assets":[` + asset + `]}`
+	}
+	page := func(releases ...string) string {
+		return `<script>{"releasesInfo":{"releases":[` + strings.Join(releases, ",") + `]}}</script>`
+	}
+	// 发布说明正文先以 HTML 渲染在页面前部，其中可能带第三方或本仓库旧版本的下载链接
+	notesHTML := `<a href="https://github.com/orhun/git-cliff/releases/download/v2.7.0/git-cliff.tar.gz">git-cliff</a>` +
+		`<a href="https://cnb.cool/dmxapi/dmxapi_claude_code/-/releases/download/v3.1.9/dmxapi-claude-code-v3.1.9-linux-amd64">旧版</a>`
+
+	cases := []struct {
+		name, body, want string
+	}{
+		{"多个 release 按新→旧排列，取第一条附件路径", page(release("v3.2.1", "", true), release("v3.2.0", "", true)), "3.2.1"},
+		{"发布说明正文里的下载链接不算", notesHTML + page(release("v3.2.1", `见 \"path\":\"/dmxapi/dmxapi_claude_code/-/releases/download/v3.1.9/x\"`, true)), "3.2.1"},
+		{"最新 Release 的附件还没上传时返回上一版", page(release("v3.2.1", "", false), release("v3.2.0", "", true)), "3.2.0"},
+		{"只有附件名没有 path", `"name":"dmxapi-claude-code-v3.2.1-macos-arm64"`, ""},
+		{"没有任何匹配", `<html>暂无发布</html>`, ""},
+		{"多位数版本段", page(release("v1.10.12", "", true)), "1.10.12"},
+		{"预发布版本不命中", page(release("v3.2.1-rc.1", "", true), release("v3.2.0", "", true)), "3.2.0"},
+	}
+	for _, c := range cases {
+		if got := parseLatestVersion(c.body); got != c.want {
+			t.Errorf("%s: parseLatestVersion() = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
 func TestVisibleLength(t *testing.T) {
 	cases := []struct {
 		input string
