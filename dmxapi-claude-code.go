@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -3326,12 +3327,36 @@ func validateAPIConnection(baseURL, authToken, model string) error {
 	// 构建测试请求 URL
 	testURL := strings.TrimSuffix(baseURL, "/") + "/v1/messages"
 
-	// 创建一个简单的测试请求体
+	userID, err := newAPITestUserID()
+	if err != nil {
+		return fmt.Errorf("创建请求失败: %v", err)
+	}
+
+	// 按 Claude Code 的请求格式构建测试请求体（system 提示词、cache_control、metadata、流式）
+	ephemeral := map[string]string{"type": "ephemeral"}
 	requestBody := map[string]interface{}{
-		"model":      model,
-		"max_tokens": 1,
-		"messages": []map[string]string{
-			{"role": "user", "content": "Hi"},
+		"max_tokens": 1024,
+		"messages": []map[string]interface{}{
+			{
+				"content": []map[string]interface{}{
+					{
+						"cache_control": ephemeral,
+						"text":          "我需要知道一个答案，1+1的结果是多少，直接告诉我数字就可以，不要返回其余的。",
+						"type":          "text",
+					},
+				},
+				"role": "user",
+			},
+		},
+		"metadata": map[string]string{"user_id": userID},
+		"model":    model,
+		"stream":   true,
+		"system": []map[string]interface{}{
+			{
+				"cache_control": ephemeral,
+				"text":          "You are Claude Code, Anthropic's official CLI for Claude.",
+				"type":          "text",
+			},
 		},
 	}
 
@@ -3364,6 +3389,11 @@ func validateAPIConnection(baseURL, authToken, model string) error {
 	}
 	defer resp.Body.Close()
 
+	// 成功时为 SSE 流式响应：逐行检查，不必读完整条流
+	if resp.StatusCode == 200 {
+		return checkStreamResponse(resp.Body)
+	}
+
 	// 读取响应
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -3372,9 +3402,6 @@ func validateAPIConnection(baseURL, authToken, model string) error {
 
 	// 检查状态码
 	switch resp.StatusCode {
-	case 200:
-		// 成功
-		return nil
 	case 401:
 		return fmt.Errorf("认证失败: API Token 无效")
 	case 403:
@@ -3391,6 +3418,89 @@ func validateAPIConnection(baseURL, authToken, model string) error {
 			return fmt.Errorf("API 错误 (%d): %s", resp.StatusCode, apiResp.Error.Message)
 		}
 		return fmt.Errorf("API 返回错误状态码: %d", resp.StatusCode)
+	}
+}
+
+// newAPITestUserID 生成验证请求的 metadata.user_id，格式与 Claude Code 相同（JSON 字符串）：
+// device_id（64 位 hex）与 session_id（UUID v4）每次随机生成，account_uuid 留空。
+func newAPITestUserID() (string, error) {
+	b := make([]byte, 48)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	s := b[32:]
+	s[6] = (s[6] & 0x0f) | 0x40 // UUID version 4
+	s[8] = (s[8] & 0x3f) | 0x80 // RFC 4122 variant
+	// 用 struct 而非 map：按 device_id、account_uuid、session_id 的声明顺序输出（与 Claude Code 一致）
+	userID, err := json.Marshal(struct {
+		DeviceID    string `json:"device_id"`
+		AccountUUID string `json:"account_uuid"`
+		SessionID   string `json:"session_id"`
+	}{
+		DeviceID:  fmt.Sprintf("%x", b[:32]),
+		SessionID: fmt.Sprintf("%x-%x-%x-%x-%x", s[0:4], s[4:6], s[6:8], s[8:10], s[10:]),
+	})
+	if err != nil {
+		return "", err
+	}
+	return string(userID), nil
+}
+
+// checkStreamResponse 逐行检查 HTTP 200 的 SSE 流式响应，判定 API 验证结果。
+// error 事件返回错误，其中 rate_limit_error 与 HTTP 429 一致视为认证成功；
+// 读到模型输出（content_block_delta）或 message_stop 即判定成功并提前返回，不必等整条流结束；
+// 流正常结束视为成功；读取出错（如超时）时，若已收到 message_start（上游已接受 URL/Key/模型）也视为成功。
+func checkStreamResponse(r io.Reader) error {
+	reader := bufio.NewReader(r)
+	event := ""
+	started := false
+	for {
+		line, readErr := reader.ReadString('\n')
+		line = strings.TrimSpace(line)
+		if line == "" {
+			event = "" // 空行是 SSE 事件分隔符
+		} else if name, ok := strings.CutPrefix(line, "event:"); ok {
+			event = strings.TrimSpace(name)
+		} else if data, ok := strings.CutPrefix(line, "data:"); ok {
+			data = strings.TrimSpace(data)
+			var ev struct {
+				Type string `json:"type"`
+				APIResponse
+			}
+			// 字段类型不符时 Unmarshal 仍会填充能匹配的字段，所以无论是否报错都按 ev 判定
+			jsonErr := json.Unmarshal([]byte(data), &ev)
+			if ev.Error != nil || ev.Type == "error" || event == "error" {
+				if ev.Error != nil && ev.Error.Type == "rate_limit_error" {
+					return nil // 与 HTTP 429 一致：速率限制也表示认证成功
+				}
+				msg := ""
+				if ev.Error != nil {
+					msg = ev.Error.Message
+					if msg == "" {
+						msg = ev.Error.Type
+					}
+				}
+				if msg == "" && jsonErr != nil {
+					msg = data // 负载不是预期的 JSON 结构时直接展示原文
+				}
+				if msg == "" {
+					msg = "未知错误"
+				}
+				return fmt.Errorf("API 错误: %s", msg)
+			}
+			switch ev.Type {
+			case "message_start":
+				started = true
+			case "content_block_delta", "message_stop":
+				return nil
+			}
+		}
+		if readErr != nil {
+			if readErr == io.EOF || started {
+				return nil
+			}
+			return fmt.Errorf("读取响应失败: %v", readErr)
+		}
 	}
 }
 

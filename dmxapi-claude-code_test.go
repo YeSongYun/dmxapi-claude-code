@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"testing/iotest"
 	"time"
 )
 
@@ -2997,5 +3001,243 @@ func TestRebuildVSCodeConfig(t *testing.T) {
 	}
 	if _, ok := m[vscodeEnvKey]; !ok {
 		t.Fatalf("重建后缺少 %s 键: %v", vscodeEnvKey, m)
+	}
+}
+
+// sseEvents 把若干 (event, data) 对拼成 SSE 文本，用于模拟上游的流式响应。
+func sseEvents(pairs ...string) string {
+	var b strings.Builder
+	for i := 0; i+1 < len(pairs); i += 2 {
+		fmt.Fprintf(&b, "event: %s\ndata: %s\n\n", pairs[i], pairs[i+1])
+	}
+	return b.String()
+}
+
+// normalSSEStream 一段正常的 Anthropic 流式响应（模型回答「2」）
+var normalSSEStream = sseEvents(
+	"message_start", `{"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","content":[],"model":"claude-opus-5","usage":{"input_tokens":30,"output_tokens":1}}}`,
+	"content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+	"ping", `{"type":"ping"}`,
+	"content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"2"}}`,
+	"content_block_stop", `{"type":"content_block_stop","index":0}`,
+	"message_delta", `{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}`,
+	"message_stop", `{"type":"message_stop"}`,
+)
+
+func TestValidateAPIConnectionRequestBody(t *testing.T) {
+	type capturedRequest struct {
+		method, path string
+		header       http.Header
+		raw          []byte
+	}
+	reqs := make(chan capturedRequest, 2)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		reqs <- capturedRequest{method: r.Method, path: r.URL.Path, header: r.Header.Clone(), raw: raw}
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, normalSSEStream)
+	}))
+	defer srv.Close()
+
+	userIDRe := regexp.MustCompile(`^\{"device_id":"[0-9a-f]{64}","account_uuid":"","session_id":"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"\}$`)
+	toJSON := func(v interface{}) string {
+		b, err := json.Marshal(v)
+		if err != nil {
+			t.Fatalf("json.Marshal: %v", err)
+		}
+		return string(b)
+	}
+	ephemeral := map[string]interface{}{"type": "ephemeral"}
+	wantMessages := []interface{}{
+		map[string]interface{}{
+			"content": []interface{}{
+				map[string]interface{}{
+					"cache_control": ephemeral,
+					"text":          "我需要知道一个答案，1+1的结果是多少，直接告诉我数字就可以，不要返回其余的。",
+					"type":          "text",
+				},
+			},
+			"role": "user",
+		},
+	}
+	wantSystem := []interface{}{
+		map[string]interface{}{
+			"cache_control": ephemeral,
+			"text":          "You are Claude Code, Anthropic's official CLI for Claude.",
+			"type":          "text",
+		},
+	}
+
+	var userIDs []string
+	for i := 1; i <= 2; i++ {
+		var err error
+		_ = captureStdout(t, func() {
+			// Base URL 带末尾斜杠、模型带 [1m] 后缀：请求路径与模型名都应被规整
+			err = validateAPIConnection(srv.URL+"/", "sk-test", "claude-opus-5[1m]")
+		})
+		if err != nil {
+			t.Fatalf("第 %d 次验证应成功，got %v", i, err)
+		}
+		c := <-reqs
+
+		if c.method != http.MethodPost || c.path != "/v1/messages" {
+			t.Fatalf("第 %d 次请求 = %s %s，want POST /v1/messages", i, c.method, c.path)
+		}
+		if c.header.Get("x-api-key") != "sk-test" || c.header.Get("anthropic-version") != "2023-06-01" ||
+			c.header.Get("Content-Type") != "application/json" {
+			t.Fatalf("第 %d 次请求头不对: %v", i, c.header)
+		}
+
+		var m map[string]interface{}
+		if err := json.Unmarshal(c.raw, &m); err != nil {
+			t.Fatalf("第 %d 次请求体不是合法 JSON: %v\n%s", i, err, c.raw)
+		}
+		if len(m) != 6 {
+			t.Fatalf("请求体顶层应恰好 6 个 key，got %d: %s", len(m), c.raw)
+		}
+		for _, k := range []string{"max_tokens", "messages", "metadata", "model", "stream", "system"} {
+			if _, ok := m[k]; !ok {
+				t.Fatalf("请求体缺少 %s: %s", k, c.raw)
+			}
+		}
+		if m["model"] != "claude-opus-5" {
+			t.Fatalf("model = %v，want claude-opus-5（应去掉 [1m] 后缀）", m["model"])
+		}
+		if m["max_tokens"] != float64(1024) {
+			t.Fatalf("max_tokens = %v，want 1024", m["max_tokens"])
+		}
+		if m["stream"] != true {
+			t.Fatalf("stream = %v，want true", m["stream"])
+		}
+		if got, want := toJSON(m["messages"]), toJSON(wantMessages); got != want {
+			t.Fatalf("messages 不对:\n got  %s\n want %s", got, want)
+		}
+		if got, want := toJSON(m["system"]), toJSON(wantSystem); got != want {
+			t.Fatalf("system 不对:\n got  %s\n want %s", got, want)
+		}
+
+		meta, ok := m["metadata"].(map[string]interface{})
+		if !ok || len(meta) != 1 {
+			t.Fatalf("metadata 应只含 user_id，got %v", m["metadata"])
+		}
+		userID, _ := meta["user_id"].(string)
+		if !userIDRe.MatchString(userID) {
+			t.Fatalf("user_id 格式与 Claude Code 不一致: %q", userID)
+		}
+		userIDs = append(userIDs, userID)
+
+		// 逐字节对照用户给定的请求体（紧凑形式，仅 model 与 user_id 为动态值）
+		wantRaw := `{"max_tokens":1024,"messages":[{"content":[{"cache_control":{"type":"ephemeral"},"text":"我需要知道一个答案，1+1的结果是多少，直接告诉我数字就可以，不要返回其余的。","type":"text"}],"role":"user"}],"metadata":{"user_id":` +
+			toJSON(userID) +
+			`},"model":"claude-opus-5","stream":true,"system":[{"cache_control":{"type":"ephemeral"},"text":"You are Claude Code, Anthropic's official CLI for Claude.","type":"text"}]}`
+		if string(c.raw) != wantRaw {
+			t.Fatalf("请求体与期望不一致:\n got  %s\n want %s", c.raw, wantRaw)
+		}
+	}
+	if userIDs[0] == userIDs[1] {
+		t.Fatalf("user_id 应每次随机生成，两次却相同: %q", userIDs[0])
+	}
+}
+
+func TestValidateAPIConnectionResponses(t *testing.T) {
+	cases := []struct {
+		name    string
+		status  int
+		body    string
+		wantErr string // 为空表示验证应成功
+	}{
+		{"200 正常流", 200, normalSSEStream, ""},
+		{"200 流内 overloaded_error", 200, sseEvents(
+			"message_start", `{"type":"message_start","message":{}}`,
+			"error", `{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`,
+		), "Overloaded"},
+		{"401 认证失败", 401, `{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}`, "认证失败"},
+		{"400 JSON 错误", 400, `{"type":"error","error":{"type":"invalid_request_error","message":"model: not found"}}`, "model: not found"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.status)
+				io.WriteString(w, tc.body)
+			}))
+			defer srv.Close()
+
+			var err error
+			_ = captureStdout(t, func() { err = validateAPIConnection(srv.URL, "sk-test", "claude-opus-5") })
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("验证应成功，got %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("错误应包含 %q，got %v", tc.wantErr, err)
+			}
+		})
+	}
+
+	t.Run("读到模型输出即返回，不等流结束", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			io.Copy(io.Discard, r.Body) // 读完请求体，服务端才能感知客户端断开
+			io.WriteString(w, sseEvents(
+				"message_start", `{"type":"message_start","message":{}}`,
+				"content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"2"}}`,
+			))
+			w.(http.Flusher).Flush()
+			// 模拟上游迟迟不结束流：等客户端断开，5s 兜底
+			select {
+			case <-r.Context().Done():
+			case <-time.After(5 * time.Second):
+			}
+		}))
+		defer srv.Close()
+
+		start := time.Now()
+		var err error
+		_ = captureStdout(t, func() { err = validateAPIConnection(srv.URL, "sk-test", "claude-opus-5") })
+		if err != nil {
+			t.Fatalf("验证应成功，got %v", err)
+		}
+		if elapsed := time.Since(start); elapsed > 3*time.Second {
+			t.Fatalf("应在读到模型输出后立即返回，实际耗时 %v", elapsed)
+		}
+	})
+}
+
+func TestCheckStreamResponse(t *testing.T) {
+	readErr := errors.New("模拟读取超时")
+	cases := []struct {
+		name    string
+		r       io.Reader
+		wantErr string // 为空表示应判定成功
+	}{
+		{"正常流", strings.NewReader(normalSSEStream), ""},
+		{"空 body", strings.NewReader(""), ""},
+		{"CRLF 换行且 data 冒号后无空格", strings.NewReader("event: error\r\ndata:{\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"Internal server error\"}}\r\n\r\n"), "Internal server error"},
+		{"event: error 后跟非 JSON 文本", strings.NewReader("event: error\ndata: upstream timeout\n\n"), "upstream timeout"},
+		{"error 的 message 与 type 都为空", strings.NewReader(sseEvents("error", `{"type":"error","error":{}}`)), "未知错误"},
+		{"error 只有 type 时用 type 作信息", strings.NewReader(sseEvents("error", `{"type":"error","error":{"type":"overloaded_error"}}`)), "overloaded_error"},
+		{"无 event 行、仅 type 为 error", strings.NewReader("data: {\"type\":\"error\"}\n\n"), "未知错误"},
+		{"无 event 行、error 字段结构不符", strings.NewReader("data: {\"type\":\"error\",\"error\":\"boom\"}\n\n"), "boom"},
+		{"event: error 后跟不含 error 的 JSON", strings.NewReader("event: error\ndata: {\"foo\":1}\n\n"), "未知错误"},
+		{"event: error 后跟空 data", strings.NewReader("event: error\ndata:\n\n"), "未知错误"},
+		{"空行后事件名复位，后续 data 不继承 error", strings.NewReader("event: error\n\ndata: {\"type\":\"message_start\",\"message\":{}}\n\n"), ""},
+		{"rate_limit_error 与 429 一致视为成功", strings.NewReader(sseEvents("error", `{"type":"error","error":{"type":"rate_limit_error","message":"Rate limited"}}`)), ""},
+		{"已收到 message_start 后读取出错", io.MultiReader(strings.NewReader(sseEvents("message_start", `{"type":"message_start","message":{}}`)), iotest.ErrReader(readErr)), ""},
+		{"未收到任何事件就读取出错", iotest.ErrReader(readErr), "读取响应失败"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := checkStreamResponse(tc.r)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("应判定成功，got %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("错误应包含 %q，got %v", tc.wantErr, err)
+			}
+		})
 	}
 }
