@@ -73,6 +73,9 @@ func TestParseLatestVersion(t *testing.T) {
 		{"没有任何匹配", `<html>暂无发布</html>`, ""},
 		{"多位数版本段", page(release("v1.10.12", "", true)), "1.10.12"},
 		{"预发布版本不命中", page(release("v3.2.1-rc.1", "", true), release("v3.2.0", "", true)), "3.2.0"},
+		{"其他仓库的附件路径不算", `{"path":"/other/fork/-/releases/download/v9.9.9/x"}` + page(release("v3.2.1", "", true)), "3.2.1"},
+		{"两段版本号不命中", page(release("v3.2", "", true)), ""},
+		{"四段版本号不命中", page(release("v3.2.1.4", "", true)), ""},
 	}
 	for _, c := range cases {
 		if got := parseLatestVersion(c.body); got != c.want {
