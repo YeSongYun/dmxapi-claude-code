@@ -167,7 +167,7 @@ xattr -cr dmxapi-claude-code-v1.9.7-macos-amd64
 
 | 系统 / Shell | 写入位置 | 立即生效方式 |
 |------|------|-------------|
-| Windows | 用户环境变量（`setx`，超长值经注册表写入）| 重新打开终端 |
+| Windows | 用户环境变量（注册表 `HKCU\Environment`）| 重新打开终端 |
 | Linux (bash) | `~/.bashrc` | `source ~/.bashrc` |
 | Linux (zsh) | `~/.zshrc` | `source ~/.zshrc` |
 | macOS (zsh) | `~/.zshrc` 和 `~/.zprofile` | `source ~/.zshrc` |

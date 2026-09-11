@@ -3,6 +3,7 @@
 package main
 
 import (
+	"errors"
 	"runtime"
 	"syscall"
 
@@ -25,6 +26,17 @@ func getWindowsACP() uint32 { return 0 }
 
 // broadcastEnvironmentChange 在非 Windows 上为 no-op；仅 Windows 需要 WM_SETTINGCHANGE 广播
 func broadcastEnvironmentChange() {}
+
+// errUserEnvUnsupported 标记在非 Windows 平台调用了 Windows 用户环境变量（注册表）操作
+var errUserEnvUnsupported = errors.New("Windows 用户环境变量仅在 Windows 上可用")
+
+// setUserEnv / getUserEnv / removeUserEnv 在非 Windows 平台上是编译占位：主流程只在
+// runtime.GOOS == "windows" 分支调用它们，这里保证主文件能跨平台编译
+func setUserEnv(key, value string) error { return errUserEnvUnsupported }
+
+func getUserEnv(key string) (string, bool, error) { return "", false, errUserEnvUnsupported }
+
+func removeUserEnv(key string) error { return errUserEnvUnsupported }
 
 // readConsoleKey 在非 Windows 平台上是编译占位，运行时永不被调用
 func readConsoleKey() KeyType {

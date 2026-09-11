@@ -236,29 +236,6 @@ func TestIsWSLFromContent(t *testing.T) {
 	}
 }
 
-func TestSetxOrRegAdd(t *testing.T) {
-	chooseCmd := func(value string) string {
-		if len(value) > 900 {
-			return "REG_ADD"
-		}
-		return "SETX"
-	}
-
-	shortVal := strings.Repeat("a", 100)
-	borderVal := strings.Repeat("a", 900)
-	longVal := strings.Repeat("a", 901)
-
-	if chooseCmd(shortVal) != "SETX" {
-		t.Errorf("短值（100字节）应使用 SETX")
-	}
-	if chooseCmd(borderVal) != "SETX" {
-		t.Errorf("边界值（900字节）应使用 SETX")
-	}
-	if chooseCmd(longVal) != "REG_ADD" {
-		t.Errorf("超长值（901字节）应使用 REG_ADD")
-	}
-}
-
 func TestDetectShellProfile(t *testing.T) {
 	cases := []struct {
 		shellEnv  string
@@ -754,17 +731,6 @@ func TestClearClaudeSettingsManagedKeys(t *testing.T) {
 	})
 }
 
-func TestRunCommandIncludesCombinedOutput(t *testing.T) {
-	err := runCommand("/bin/sh", "-c", "printf 'boom'; printf ' fail' 1>&2; exit 9")
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	msg := err.Error()
-	if !strings.Contains(msg, "boom") || !strings.Contains(msg, "fail") {
-		t.Fatalf("expected combined output in error, got %q", msg)
-	}
-}
-
 func TestSetAndVerifyUserEnvWithOps(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		store := map[string]string{}
@@ -868,6 +834,265 @@ func TestRemoveAndVerifyUserEnvWithOps(t *testing.T) {
 			t.Fatalf("expected still exists failure, got %v", err)
 		}
 	})
+}
+
+// TestSetEnvVarsWindowsWithOps 防回归本次卡顿修复的核心：不管写几个变量，WM_SETTINGCHANGE 都只广播一次。
+func TestSetEnvVarsWindowsWithOps(t *testing.T) {
+	newStore := func() (map[string]string, userEnvSetter, userEnvGetter) {
+		store := map[string]string{}
+		set := func(key, value string) error {
+			store[key] = value
+			return nil
+		}
+		get := func(key string) (string, bool, error) {
+			v, ok := store[key]
+			return v, ok, nil
+		}
+		return store, set, get
+	}
+	vars := func() map[string]string {
+		return map[string]string{
+			envBaseURL:   "https://www.dmxapi.cn",
+			envAuthToken: "sk-test",
+			envModel:     "claude-opus-5",
+		}
+	}
+
+	t.Run("多变量全部写入且只广播一次", func(t *testing.T) {
+		store, set, get := newStore()
+		notified := 0
+		want := vars()
+		if err := setEnvVarsWindowsWithOps(want, set, get, func() { notified++ }); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		for k, v := range want {
+			if store[k] != v {
+				t.Fatalf("%s = %q, want %q", k, store[k], v)
+			}
+		}
+		if notified != 1 {
+			t.Fatalf("notify 次数 = %d, want 1", notified)
+		}
+	})
+
+	t.Run("空值跳过", func(t *testing.T) {
+		store, set, get := newStore()
+		notified := 0
+		err := setEnvVarsWindowsWithOps(map[string]string{envBaseURL: "https://www.dmxapi.cn", envAgentTeams: ""}, set, get, func() { notified++ })
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if _, ok := store[envAgentTeams]; ok {
+			t.Fatal("空值不应写入")
+		}
+		if notified != 1 {
+			t.Fatalf("notify 次数 = %d, want 1", notified)
+		}
+	})
+
+	t.Run("全空不写入也不广播", func(t *testing.T) {
+		_, _, get := newStore()
+		notified := 0
+		set := func(key, value string) error {
+			t.Fatalf("空值不应写入: %s", key)
+			return nil
+		}
+		err := setEnvVarsWindowsWithOps(map[string]string{envAgentTeams: "", envEffortLevel: ""}, set, get, func() { notified++ })
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if notified != 0 {
+			t.Fatalf("notify 次数 = %d, want 0", notified)
+		}
+	})
+
+	// map 遍历顺序随机：只断言返回错误且仍广播一次，不断言失败前写入了几个
+	t.Run("中途写入失败仍广播一次", func(t *testing.T) {
+		store, _, get := newStore()
+		notified := 0
+		set := func(key, value string) error {
+			if key == envAuthToken {
+				return fmt.Errorf("access denied")
+			}
+			store[key] = value
+			return nil
+		}
+		err := setEnvVarsWindowsWithOps(vars(), set, get, func() { notified++ })
+		if err == nil || !strings.Contains(err.Error(), "设置环境变量 "+envAuthToken+" 失败") {
+			t.Fatalf("expected set failure, got %v", err)
+		}
+		if notified != 1 {
+			t.Fatalf("notify 次数 = %d, want 1", notified)
+		}
+	})
+
+	t.Run("回读不一致仍广播一次", func(t *testing.T) {
+		notified := 0
+		err := setEnvVarsWindowsWithOps(map[string]string{envModel: "claude-opus-5"},
+			func(key, value string) error { return nil },
+			func(key string) (string, bool, error) { return "stale", true, nil },
+			func() { notified++ },
+		)
+		if err == nil || !strings.Contains(err.Error(), "校验环境变量 "+envModel+" 失败") {
+			t.Fatalf("expected verify failure, got %v", err)
+		}
+		if notified != 1 {
+			t.Fatalf("notify 次数 = %d, want 1", notified)
+		}
+	})
+}
+
+// TestRemoveEnvVarsWindowsWithOps 防回归：批量删除最多广播一次、本就不存在的变量不删也不广播、
+// 单个失败不中断其余变量。
+func TestRemoveEnvVarsWindowsWithOps(t *testing.T) {
+	keys := []string{envBaseURL, envAuthToken, envModel}
+	newStore := func() map[string]string {
+		return map[string]string{
+			envBaseURL:   "https://www.dmxapi.cn",
+			envAuthToken: "sk-test",
+			envModel:     "claude-opus-5",
+		}
+	}
+	getFrom := func(store map[string]string) userEnvGetter {
+		return func(key string) (string, bool, error) {
+			v, ok := store[key]
+			return v, ok, nil
+		}
+	}
+
+	t.Run("多个存在的变量全部删除且只广播一次", func(t *testing.T) {
+		store := newStore()
+		notified := 0
+		errs := removeEnvVarsWindowsWithOps(keys,
+			func(key string) error {
+				delete(store, key)
+				return nil
+			},
+			getFrom(store),
+			func() { notified++ },
+		)
+		if len(errs) != 0 {
+			t.Fatalf("unexpected errors: %v", errs)
+		}
+		if len(store) != 0 {
+			t.Fatalf("变量未删净: %v", store)
+		}
+		if notified != 1 {
+			t.Fatalf("notify 次数 = %d, want 1", notified)
+		}
+	})
+
+	t.Run("全部本就不存在时不删除也不广播", func(t *testing.T) {
+		notified := 0
+		errs := removeEnvVarsWindowsWithOps(allEnvVarKeys,
+			func(key string) error {
+				t.Fatalf("不存在的变量不应调用 removeFn: %s", key)
+				return nil
+			},
+			getFrom(map[string]string{}),
+			func() { notified++ },
+		)
+		if len(errs) != 0 {
+			t.Fatalf("unexpected errors: %v", errs)
+		}
+		if notified != 0 {
+			t.Fatalf("notify 次数 = %d, want 0", notified)
+		}
+	})
+
+	t.Run("单个删除失败不中断其余变量", func(t *testing.T) {
+		store := newStore()
+		notified := 0
+		errs := removeEnvVarsWindowsWithOps(keys,
+			func(key string) error {
+				if key == envAuthToken {
+					return fmt.Errorf("access denied")
+				}
+				delete(store, key)
+				return nil
+			},
+			getFrom(store),
+			func() { notified++ },
+		)
+		if len(errs) != 1 || !strings.Contains(errs[0].Error(), "删除 "+envAuthToken+" 失败") {
+			t.Fatalf("expected one failure for %s, got %v", envAuthToken, errs)
+		}
+		if _, ok := store[envModel]; ok {
+			t.Fatal("失败项之后的变量应继续删除")
+		}
+		if notified != 1 {
+			t.Fatalf("notify 次数 = %d, want 1", notified)
+		}
+	})
+
+	// 删除前的查询出错时不能当成"不存在"跳过，否则一次没删掉的 ANTHROPIC_AUTH_TOKEN 会被报成成功
+	t.Run("查询出错时照常删除并报告校验失败", func(t *testing.T) {
+		notified := 0
+		removed := 0
+		errs := removeEnvVarsWindowsWithOps([]string{envModel},
+			func(key string) error {
+				removed++
+				return nil
+			},
+			func(key string) (string, bool, error) { return "", false, fmt.Errorf("registry busy") },
+			func() { notified++ },
+		)
+		if removed != 1 {
+			t.Fatalf("查询出错时仍应尝试删除，removeFn 调用次数 = %d", removed)
+		}
+		if len(errs) != 1 || !strings.Contains(errs[0].Error(), "校验删除 "+envModel+" 失败") {
+			t.Fatalf("expected verify failure, got %v", errs)
+		}
+		if notified != 1 {
+			t.Fatalf("notify 次数 = %d, want 1", notified)
+		}
+	})
+
+	t.Run("空列表不广播", func(t *testing.T) {
+		notified := 0
+		errs := removeEnvVarsWindowsWithOps(nil,
+			func(key string) error { return nil },
+			getFrom(map[string]string{}),
+			func() { notified++ },
+		)
+		if len(errs) != 0 || notified != 0 {
+			t.Fatalf("errs=%v notify=%d, want 无错误且不广播", errs, notified)
+		}
+	})
+}
+
+// TestWindowsUserEnvRegistryRoundTrip 在真实 Windows 上走一遍进程内注册表读写：写入一个超过原 setx
+// 1024 字符上限、含空格的值 → 回读逐字一致 → 删除 → 确认不存在 → 再删仍成功（幂等）。
+// 会真实改动 HKCU\Environment（使用唯一的测试变量名，结束时清理），非 Windows 平台跳过。
+func TestWindowsUserEnvRegistryRoundTrip(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skipf("真实注册表往返仅在 Windows 上执行，当前 GOOS=%s", runtime.GOOS)
+	}
+	key := fmt.Sprintf("DMXAPI_CC_TEST_%d", time.Now().UnixNano())
+	t.Cleanup(func() { _ = removeUserEnv(key) })
+
+	value := strings.Repeat("dmx api ", 250) // 2000 字符，含空格且以空格结尾
+	if err := setEnvVarsWindows(map[string]string{key: value}); err != nil {
+		t.Fatalf("写入失败: %v", err)
+	}
+	got, exists, err := getUserEnv(key)
+	if err != nil || !exists || got != value {
+		t.Fatalf("回读不一致: exists=%v err=%v len=%d, want len=%d", exists, err, len(got), len(value))
+	}
+
+	if err := removeEnvVarWindows(key); err != nil {
+		t.Fatalf("删除失败: %v", err)
+	}
+	if _, exists, err := getUserEnv(key); err != nil || exists {
+		t.Fatalf("删除后仍存在: exists=%v err=%v", exists, err)
+	}
+	// 包装层会先查、值不存在就跳过，到不了 removeUserEnv；这里直接调用，锁住它「值不存在也算成功」的分支
+	if err := removeUserEnv(key); err != nil {
+		t.Fatalf("removeUserEnv 对不存在的值应幂等成功, got %v", err)
+	}
+	if err := removeEnvVarWindows(key); err != nil {
+		t.Fatalf("重复删除应幂等成功, got %v", err)
+	}
 }
 
 func TestParseRegQueryValue(t *testing.T) {
@@ -2938,11 +3163,10 @@ func TestBuildSaveFailureMenu(t *testing.T) {
 	}
 }
 
-// TestSaveSpinnerTimeoutCoversCommandBudget 防回归：spinner 兜底必须大于同一路径上
-// 命令级超时之和的上界，否则慢（而非卡死）的保存会先撞 spinner 超时，而那条路径上
-// 「重试」和「跳过」都不可用，用户白输一遍配置。
+// TestSaveSpinnerTimeoutCoversCommandBudget 防回归：spinner 兜底不得低于按外部命令估算的保守预算，
+// 否则慢（而非卡死）的保存会先撞 spinner 超时，而那条路径上「重试」和「跳过」都不可用，用户白输一遍配置。
 func TestSaveSpinnerTimeoutCoversCommandBudget(t *testing.T) {
-	// Windows 最坏：每个受管变量 setx + REG QUERY 两个进程
+	// 沿用原先"每个受管变量两条外部命令"的预算；Windows 已改为进程内写注册表，实际耗时远低于此
 	worst := time.Duration(2*len(allEnvVarKeys)) * defaultCommandTimeout
 	if saveSpinnerTimeout <= worst {
 		t.Fatalf("saveSpinnerTimeout=%v 未覆盖命令级预算上界 %v", saveSpinnerTimeout, worst)

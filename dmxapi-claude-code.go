@@ -366,15 +366,15 @@ func printInfo(text string) {
 // exec.Command 构造时就执行，ctx 保护不到）、writeFileAtomic 的 tmp.Sync() 卡在网络 home 等。
 const defaultSpinnerTimeout = 300 * time.Second
 
-// saveSpinnerTimeout 是保存/应用配置这类会串行启动大量子进程的任务的兜底上界。
+// saveSpinnerTimeout 是保存/应用配置任务的兜底上界。
 //
-// 它必须**大于**该路径上命令级超时之和的上界，否则 spinner 会先于命令层触发，把一次
-// 只是慢（而非卡死）的保存判成超时——而 spinner 超时会遗弃 task goroutine，导致
+// Windows 用户环境变量已改为进程内调用注册表 API 读写（见 console_windows.go 的 setUserEnv），
+// 不再逐个启动 setx / REG / powershell 子进程，也就没有了命令级超时；而进程内的注册表调用与
+// WM_SETTINGCHANGE 广播都无法被 ctx 取消，spinner 超时是这条路径上唯一的兜底。
+// 数值沿用原先按 2×(变量数+3) 个命令 × defaultCommandTimeout 估算的保守上界：宁可等久一点，
+// 也不要把只是慢（而非卡死）的保存判成超时——spinner 超时会遗弃 task goroutine，导致
 // "重试"与"跳过"都不能给（见 runSaveWithRetry），用户白输一遍配置还落下半套写入。
-// Windows 最坏：每个受管变量走 setx + REG QUERY 两个进程，applyNamedConfig 再叠加
-// 两次 removeManagedEnvVar（各 powershell + REG DELETE + REG QUERY）与 attribution 写入，
-// 故按 2×(变量数+3) 个命令 × defaultCommandTimeout 估算。
-// 正常保存只需几秒，这个上界只在真正的无限阻塞时才会走到。
+// 这个上界只在真正的无限阻塞时才会走到。
 var saveSpinnerTimeout = time.Duration(2*(len(allEnvVarKeys)+3)) * defaultCommandTimeout
 
 // spinnerElapsedThreshold 是开始在动画里显示已耗时的阈值。让用户能区分"慢"和"卡死"。
@@ -1444,13 +1444,30 @@ func allUnixCandidateConfigFiles() []string {
 	}
 }
 
-// setEnvVarsWindows 在 Windows 上批量设置用户环境变量（写入后立即校验）
+// setEnvVarsWindows 在 Windows 上批量设置用户环境变量（每个写入后立即回读校验），
+// 全部处理完只广播一次 WM_SETTINGCHANGE。
 func setEnvVarsWindows(vars map[string]string) error {
+	return setEnvVarsWindowsWithOps(vars, setUserEnv, getUserEnv, broadcastEnvironmentChange)
+}
+
+// setEnvVarsWindowsWithOps 是 setEnvVarsWindows 的可注入实现。
+//
+// 广播放在循环外只发一次：WM_SETTINGCHANGE 要逐个等所有顶层窗口响应，原先 setx 每写一个变量
+// 就广播一次，正是 Windows 上保存配置卡顿的来源之一。中途失败时已写入的变量同样需要通知
+// 其他进程，所以只要尝试过写入就广播。
+func setEnvVarsWindowsWithOps(vars map[string]string, setFn userEnvSetter, getFn userEnvGetter, notifyFn func()) error {
+	attempted := false
+	defer func() {
+		if attempted {
+			notifyFn()
+		}
+	}()
 	for key, value := range vars {
 		if value == "" {
 			continue
 		}
-		if err := setAndVerifyUserEnv(key, value); err != nil {
+		attempted = true
+		if err := setAndVerifyUserEnvWithOps(key, value, setFn, getFn); err != nil {
 			return err
 		}
 	}
@@ -1462,10 +1479,6 @@ type userEnvGetter func(string) (string, bool, error)
 type userEnvSetter func(string, string) error
 
 type userEnvRemover func(string) error
-
-func setAndVerifyUserEnv(key, value string) error {
-	return setAndVerifyUserEnvWithOps(key, value, setUserEnv, getUserEnv)
-}
 
 func setAndVerifyUserEnvWithOps(key, value string, setFn userEnvSetter, getFn userEnvGetter) error {
 	if err := setFn(key, value); err != nil {
@@ -1484,25 +1497,9 @@ func setAndVerifyUserEnvWithOps(key, value string, setFn userEnvSetter, getFn us
 	return nil
 }
 
-func setUserEnv(key, value string) error {
-	if len(value) > 900 {
-		// REG ADD 不自动广播 WM_SETTINGCHANGE，需要手工通知其他进程环境变量已变
-		if err := runCommand("REG", "ADD", `HKCU\Environment`, "/V", key, "/T", "REG_SZ", "/D", value, "/F"); err != nil {
-			return err
-		}
-		broadcastEnvironmentChange()
-		return nil
-	}
-	// setx 会自动广播，无需额外通知
-	return runCommand("setx", key, value)
-}
-
-func getUserEnv(key string) (string, bool, error) {
-	output, err := execCombinedWithTimeout(defaultCommandTimeout, "REG", "QUERY", `HKCU\Environment`, "/V", key)
-	return classifyRegQueryResult(key, output, err)
-}
-
 // classifyRegQueryResult 把一次 REG QUERY 的结果分类为「取到值 / 变量不存在 / 出错」。
+// 原生 Windows 已改为进程内读注册表（见 console_windows.go 的 getUserEnv），目前唯一调用方是
+// WSL 下 clearWindowsRegistryFromWSLViaReg 的 reg.exe 回退路径。
 // 抽成平台无关的纯函数是为了能在任意平台上表驱动测试下面这个 Windows 专属陷阱：
 //
 //	Windows 的 os.Process.Kill 实现是 TerminateProcess(handle, 1)，被超时杀掉的子进程
@@ -2765,7 +2762,8 @@ func removeEnvVarsUnixFromFile(configPath string, keys []string, isFish bool) (r
 // clearWindowsRegistryFromWSL 通过 WSL interop 调用 Windows 侧命令清理 Windows 用户环境变量。
 // 当在 WSL 内执行清除时，只清 Linux 侧 shell 配置会留下注册表里残留，导致 Windows 侧 cmd/VSCode 仍用旧值。
 // 优先走 powershell.exe（作为真正的 Windows 进程运行，[Environment]::SetEnvironmentVariable 会
-// 自动广播 WM_SETTINGCHANGE，同 removeUserEnv 的做法）；powershell 不可用时回退到 reg.exe DELETE，
+// 自动广播 WM_SETTINGCHANGE。本程序在 WSL 下是 Linux 进程，用不了原生 Windows 路径那套进程内
+// 注册表 API）；powershell 不可用时回退到 reg.exe DELETE，
 // 并用 reg.exe QUERY 二次读校验——reg.exe 的退出码 1 无法区分"变量本就不存在"与"删除失败（如权限拒绝）"，
 // 不能直接信任退出码。
 func clearWindowsRegistryFromWSL() clearResult {
@@ -2966,17 +2964,24 @@ func clearActiveConfig(keepNamed bool) bool {
 
 	switch runtime.GOOS {
 	case "windows":
-		var regFailures []string
-		for _, key := range allEnvVarKeys {
-			if err := removeEnvVarWindows(key); err != nil {
-				regFailures = append(regFailures, fmt.Sprintf("%s: %v", key, err))
+		// 注册表删除已是进程内调用，剩下可能慢的只有末尾那一次 WM_SETTINGCHANGE 广播（响应慢的窗口
+		// 各自最多等 5s）；包进 spinner 让用户看到进度，也给这条没有命令级超时的路径加一个兜底上界。
+		var regErrs []error
+		if err := runWithSpinner("正在清除 Windows 用户环境变量...", func() error {
+			regErrs = removeEnvVarsWindows(allEnvVarKeys)
+			return nil
+		}); err != nil {
+			// 只可能是 spinner 兜底超时或 task panic：删除结果未知，按失败报告
+			results = append(results, clearResult{Location: "Windows 注册表", Status: "failed", Message: "清除未完成", Err: err})
+		} else if len(regErrs) > 0 {
+			details := make([]string, len(regErrs))
+			for i, e := range regErrs {
+				details[i] = e.Error()
 			}
-		}
-		if len(regFailures) > 0 {
 			results = append(results, clearResult{
 				Location: "Windows 注册表",
 				Status:   "failed",
-				Message:  fmt.Sprintf("%d 个变量清除失败 %s\n      %s", len(regFailures), describeWindowsRegError(), strings.Join(regFailures, "\n      ")),
+				Message:  fmt.Sprintf("%d 个变量清除失败 %s\n      %s", len(regErrs), describeWindowsRegError(), strings.Join(details, "\n      ")),
 			})
 		} else {
 			results = append(results, clearResult{
@@ -3170,9 +3175,41 @@ func removeEnvVarUnix(key string) error {
 	return nil
 }
 
-// removeEnvVarWindows 从 Windows 用户环境变量中删除指定变量
+// removeEnvVarWindows 从 Windows 用户环境变量中删除单个变量（删除后回读校验；动过注册表才广播）
 func removeEnvVarWindows(key string) error {
-	return removeAndVerifyUserEnvWithOps(key, removeUserEnv, getUserEnv)
+	if errs := removeEnvVarsWindows([]string{key}); len(errs) > 0 {
+		return errs[0]
+	}
+	return nil
+}
+
+// removeEnvVarsWindows 批量删除 Windows 用户环境变量，全部处理完最多广播一次 WM_SETTINGCHANGE。
+func removeEnvVarsWindows(keys []string) []error {
+	return removeEnvVarsWindowsWithOps(keys, removeUserEnv, getUserEnv, broadcastEnvironmentChange)
+}
+
+// removeEnvVarsWindowsWithOps 是 removeEnvVarsWindows 的可注入实现：逐个删除并回读校验，单个失败
+// 不中断，返回全部失败（错误原文已含变量名）。
+//
+// 每个变量删除前先查一次，本就不存在的直接跳过：它不需要删，也不值得为它广播——广播要逐个等所有
+// 顶层窗口响应，而 applyNamedConfig 每次都会"关闭"两个多半本就不存在的开关。查询出错时照常走
+// 删除 + 校验，由 removeAndVerifyUserEnvWithOps 给出准确的失败原因，不能当成"不存在"放过。
+func removeEnvVarsWindowsWithOps(keys []string, removeFn userEnvRemover, getFn userEnvGetter, notifyFn func()) []error {
+	var errs []error
+	touched := false
+	for _, key := range keys {
+		if _, exists, err := getFn(key); err == nil && !exists {
+			continue
+		}
+		touched = true
+		if err := removeAndVerifyUserEnvWithOps(key, removeFn, getFn); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if touched {
+		notifyFn()
+	}
+	return errs
 }
 
 func removeAndVerifyUserEnvWithOps(key string, removeFn userEnvRemover, getFn userEnvGetter) error {
@@ -3194,30 +3231,6 @@ func removeAndVerifyUserEnvWithOps(key string, removeFn userEnvRemover, getFn us
 	}
 	// 变量已不存在：无论 removeFn 是否报错，目标达成
 	return nil
-}
-
-func removeUserEnv(key string) error {
-	// 优先用 PowerShell .NET API：变量不存在时也不报错，兼容所有 Windows 语言版本和编码
-	// 先 LookPath 确认 powershell.exe 在 PATH 中，避免 Server Core 等精简环境下的无意义错误输出
-	// PowerShell .NET API 会自动广播 WM_SETTINGCHANGE，无需手工通知
-	if _, err := exec.LookPath("powershell"); err == nil {
-		psKey := strings.ReplaceAll(key, "'", "''") // 转义单引号（防御性处理）
-		script := fmt.Sprintf(`[Environment]::SetEnvironmentVariable('%s', $null, 'User')`, psKey)
-		if err := runCommand("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script); err == nil {
-			return nil
-		}
-	}
-	// PowerShell 不可用时回退到 REG DELETE（不会自动广播，需要手工通知）
-	output, err := execCombinedWithTimeout(defaultCommandTimeout, "REG", "DELETE", `HKCU\Environment`, "/V", key, "/F")
-	if err == nil {
-		broadcastEnvironmentChange()
-		return nil
-	}
-	trimmed := strings.TrimSpace(string(output))
-	if trimmed != "" {
-		return fmt.Errorf("%v: %s", err, trimmed)
-	}
-	return err
 }
 
 // wslContentMatches 判断 /proc/version 文件内容是否表明运行在 WSL 环境。
@@ -3295,19 +3308,6 @@ func execCombinedWithTimeout(timeout time.Duration, name string, args ...string)
 // execOutputWithTimeout 带超时执行命令并只返回 stdout。
 func execOutputWithTimeout(timeout time.Duration, name string, args ...string) ([]byte, error) {
 	return execWithTimeout(timeout, false, name, args...)
-}
-
-// runCommand 执行命令（带默认超时），错误信息中包含命令的合并输出
-func runCommand(name string, args ...string) error {
-	output, err := execCombinedWithTimeout(defaultCommandTimeout, name, args...)
-	if err == nil {
-		return nil
-	}
-	trimmed := strings.TrimSpace(string(output))
-	if trimmed == "" {
-		return err
-	}
-	return fmt.Errorf("%v: %s", err, trimmed)
 }
 
 // ==================== API 验证 ====================
@@ -4685,7 +4685,7 @@ const (
 // buildSaveFailureMenu 根据失败原因组装处置菜单。抽成纯函数以便直接测试各种组合。
 //
 //   - 重试：仅当**不是** spinner 兜底超时时提供。spinner 超时意味着 task goroutine 已被遗弃
-//     且仍在后台跑，此时重试会让两串 setx 交错执行、两次"读→合并→写"争抢同一份
+//     且仍在后台跑，此时重试会让两批系统环境变量写入交错执行、两次"读→合并→写"争抢同一份
 //     settings.json，静默丢配置。
 //   - 跳过系统环境变量：仅当调用方允许、且失败确实只发生在系统环境变量一侧
 //     （settings.json 已成功落盘）时提供，否则就是空头承诺。

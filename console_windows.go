@@ -3,11 +3,13 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"syscall"
 	"unsafe"
 
+	"golang.org/x/sys/windows/registry"
 	"golang.org/x/term"
 )
 
@@ -176,9 +178,9 @@ func getWindowsACP() uint32 {
 }
 
 // broadcastEnvironmentChange 通过 WM_SETTINGCHANGE 通知所有顶层窗口环境变量已更新。
-// 对于通过 REG ADD / REG DELETE 直接改注册表的操作是必需的——这些操作不会自动广播，
-// 导致 Explorer、已开的 cmd、VSCode 等进程仍持有旧值直到重启。
-// setx / PowerShell .NET API 会自动广播，不需要调用此函数。
+// setUserEnv / removeUserEnv 直接改注册表，不会自动广播——不通知的话 Explorer（以及之后从它
+// 启动的新终端）会一直拿着旧值直到注销。广播要逐个等待所有顶层窗口响应（响应慢的窗口各自
+// 最多等 timeoutMs），代价不小，所以由批量调用方在全部写 / 删完成后统一调用一次，而不是每个变量一次。
 func broadcastEnvironmentChange() {
 	const (
 		hwndBroadcast   = uintptr(0xFFFF)
@@ -200,4 +202,61 @@ func broadcastEnvironmentChange() {
 		timeoutMs,
 		uintptr(unsafe.Pointer(&result)),
 	)
+}
+
+// userEnvRegPath 是 Windows 用户级环境变量在 HKEY_CURRENT_USER 下的注册表路径（即 HKCU\Environment）
+const userEnvRegPath = `Environment`
+
+// setUserEnv 进程内调用注册表 API，把 key 写成 HKCU\Environment 下的 REG_SZ 值。
+//
+// 原先每个变量都要启动一次 setx.exe（超长值走 REG ADD）再加一次 REG QUERY 回读：进程创建、
+// 杀软逐个扫描、setx 每次自带的全局广播叠在一起，保存一次配置要卡好几秒。进程内调用只需微秒级，
+// 也没有 setx 的 1024 字符截断。一律写 REG_SZ、保持字面值不展开（setx 对含 % 的值会写成
+// REG_EXPAND_SZ）。本函数不广播，见 broadcastEnvironmentChange。
+func setUserEnv(key, value string) error {
+	k, _, err := registry.CreateKey(registry.CURRENT_USER, userEnvRegPath, registry.SET_VALUE)
+	if err != nil {
+		return err
+	}
+	defer k.Close()
+	return k.SetStringValue(key, value)
+}
+
+// getUserEnv 从 HKCU\Environment 读取 key：存在返回 (值, true, nil)，不存在返回 ("", false, nil)。
+// REG_SZ 与 REG_EXPAND_SZ 都返回未展开的原文；其他类型返回 registry.ErrUnexpectedType。
+func getUserEnv(key string) (string, bool, error) {
+	k, err := registry.OpenKey(registry.CURRENT_USER, userEnvRegPath, registry.QUERY_VALUE)
+	if errors.Is(err, registry.ErrNotExist) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	defer k.Close()
+	value, _, err := k.GetStringValue(key)
+	if errors.Is(err, registry.ErrNotExist) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return value, true, nil
+}
+
+// removeUserEnv 从 HKCU\Environment 删除 key，键或值本就不存在视为成功（幂等）。
+// 原先每删一个变量都要冷启动一次 powershell（装了杀软的机器上单次 5~15s），清除 10 个变量就是 10 次。
+// 本函数不广播，见 broadcastEnvironmentChange。
+func removeUserEnv(key string) error {
+	k, err := registry.OpenKey(registry.CURRENT_USER, userEnvRegPath, registry.SET_VALUE)
+	if errors.Is(err, registry.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer k.Close()
+	if err := k.DeleteValue(key); err != nil && !errors.Is(err, registry.ErrNotExist) {
+		return err
+	}
+	return nil
 }
