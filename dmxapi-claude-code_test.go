@@ -388,18 +388,23 @@ func TestApplyModelSuffix(t *testing.T) {
 	cases := []struct {
 		in, want string
 	}{
-		{"claude-opus-5-cc", "claude-opus-5-cc[1m]"},     // 预设表内 Ctx1M
+		{"claude-opus-5-5-cc", "claude-opus-5-5-cc[1m]"}, // 预设表内 Ctx1M
+		{"claude-sonnet-5-5-cc", "claude-sonnet-5-5-cc[1m]"},
+		{"claude-fable-5-1-cc", "claude-fable-5-1-cc[1m]"},
 		{"claude-opus-5", "claude-opus-5[1m]"},           // 表外家族匹配保持
 		{"claude-opus-4-8-cc", "claude-opus-4-8-cc[1m]"}, // 表外家族匹配保持
 		{"claude-opus-4-8", "claude-opus-4-8[1m]"},
 		{"claude-opus-4-7-cc", "claude-opus-4-7-cc[1m]"},     // 表外家族匹配保持
 		{"claude-sonnet-4-6-cc", "claude-sonnet-4-6-cc[1m]"}, // 表外家族匹配保持
-		{"claude-opus-5-cc[1m]", "claude-opus-5-cc[1m]"},     // 已有后缀幂等
+		{"claude-opus-5-5-cc[1m]", "claude-opus-5-5-cc[1m]"}, // 已有后缀幂等
 		{"claude-opus-4-6-cc", "claude-opus-4-6-cc"},         // 不匹配，原样返回
+		{"mimo-v2.6-pro", "mimo-v2.6-pro[1m]"},               // 新增第三方预设
 		{"kimi-k3-cc", "kimi-k3-cc[1m]"},                     // 预设表内第三方模型也加后缀
+		{"glm-5.3-flashx", "glm-5.3-flashx[1m]"},
 		{"glm-5.3-cc", "glm-5.3-cc[1m]"},
 		{"claude-haiku-4-5-20251001-cc", "claude-haiku-4-5-20251001-cc"}, // 表内但 Ctx1M=false，不加后缀
-		{"glm-5.1-cc", "glm-5.1-cc"},                                     // 表外第三方模型原样返回
+		{"deepseek-v4.1-flash", "deepseek-v4.1-flash[1m]"},
+		{"glm-5.1-cc", "glm-5.1-cc"}, // 表外第三方模型原样返回
 	}
 	for _, c := range cases {
 		if got := applyModelSuffix(c.in); got != c.want {

@@ -72,19 +72,19 @@ const (
 	attributionPRKey             = "pr"
 
 	// 默认模型值
-	defaultModel       = "claude-opus-5-cc"
+	defaultModel       = "claude-opus-5-5-cc"
 	defaultHaikuModel  = "claude-haiku-4-5-20251001-cc"
-	defaultSonnetModel = "claude-sonnet-5-cc"
-	defaultOpusModel   = "claude-opus-5-cc"
-	defaultFableModel  = "claude-fable-5-cc"
+	defaultSonnetModel = "claude-sonnet-5-5-cc"
+	defaultOpusModel   = "claude-opus-5-5-cc"
+	defaultFableModel  = "claude-fable-5-1-cc"
 
 	// dmxapi 推荐配置（一键模式使用）
 	recommendedBaseURL     = "https://www.dmxapi.cn"
-	recommendedModel       = "claude-opus-5-cc"
+	recommendedModel       = "claude-opus-5-5-cc"
 	recommendedHaikuModel  = "claude-haiku-4-5-20251001-cc"
-	recommendedSonnetModel = "claude-sonnet-5-cc"
-	recommendedOpusModel   = "claude-opus-5-cc"
-	recommendedFableModel  = "claude-fable-5-cc"
+	recommendedSonnetModel = "claude-sonnet-5-5-cc"
+	recommendedOpusModel   = "claude-opus-5-5-cc"
+	recommendedFableModel  = "claude-fable-5-1-cc"
 
 	// recommendedAttributionText 新手流程默认 git 署名（写入 settings.json 顶层 attribution）
 	recommendedAttributionText = "Generated with dmxapi"
@@ -100,17 +100,18 @@ type presetModel struct {
 }
 
 var presetModels = []presetModel{
-	{"claude-fable-5-cc", true},
-	{"claude-opus-5-cc", true},
-	{"claude-sonnet-5-cc", true},
+	{"claude-opus-5-5-cc", true},
+	{"claude-sonnet-5-5-cc", true},
+	{"claude-fable-5-1-cc", true},
 	{"claude-haiku-4-5-20251001-cc", false}, // haiku 非 1M 上下文，不加 [1m]
+	{"mimo-v2.6-pro", true},
 	{"kimi-k3-cc", true},
+	{"glm-5.3-flashx", true},
 	{"glm-5.3-cc", true},
 	{"glm-5.3-flash-cc", true},
 	{"qwen3.8-max-cc", true},
 	{"qwen3.8-flash-cc", true},
-	{"deepseek-v4-pro-0813-cc", true},
-	{"deepseek-v4-flash-0731-cc", true},
+	{"deepseek-v4.1-flash", true},
 }
 
 // allEnvVarKeys 本工具管理的所有环境变量名，清除时使用
@@ -3650,7 +3651,7 @@ func selectTopModeDynamic() topMenuChoice {
 	configs, _ := listNamedConfigs() // 出错按空处理，不阻断主流程
 	n := len(configs)
 
-	items := []MenuItem{{"1", "dmxapi 推荐配置", "Claude Opus 5 一键配置"}}
+	items := []MenuItem{{"1", "dmxapi 推荐配置", "Claude Opus 5.5 一键配置"}}
 	for i, c := range configs {
 		items = append(items, MenuItem{strconv.Itoa(i + 2), c.Name, namedConfigDesc(c)})
 	}
@@ -4786,7 +4787,7 @@ func saveConfig(cfg Config) error {
 // 并自动写入 Claude settings、系统环境变量与 VSCode settings.json。
 // 返回 back=true 表示用户在 Token 输入或验证失败菜单按 ESC 返回主菜单。
 func runRecommendedConfig() (back bool) {
-	printSectionHeader("dmxapi 推荐配置 (Claude Opus 5)")
+	printSectionHeader("dmxapi 推荐配置 (Claude Opus 5.5)")
 	fmt.Println()
 	printInfo(fmt.Sprintf("Base URL:         %s", recommendedBaseURL))
 	printInfo(fmt.Sprintf("默认模型:         %s", recommendedModel))
