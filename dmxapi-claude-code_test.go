@@ -390,7 +390,7 @@ func TestApplyModelSuffix(t *testing.T) {
 	}{
 		{"claude-opus-5-5-cc", "claude-opus-5-5-cc[1m]"}, // 预设表内 Ctx1M
 		{"claude-sonnet-5-5-cc", "claude-sonnet-5-5-cc[1m]"},
-		{"claude-fable-5-1-cc", "claude-fable-5-1-cc[1m]"},
+		{"claude-fable-5-2-cc", "claude-fable-5-2-cc[1m]"},
 		{"claude-opus-5", "claude-opus-5[1m]"},           // 表外家族匹配保持
 		{"claude-opus-4-8-cc", "claude-opus-4-8-cc[1m]"}, // 表外家族匹配保持
 		{"claude-opus-4-8", "claude-opus-4-8[1m]"},
@@ -399,11 +399,17 @@ func TestApplyModelSuffix(t *testing.T) {
 		{"claude-opus-5-5-cc[1m]", "claude-opus-5-5-cc[1m]"}, // 已有后缀幂等
 		{"claude-opus-4-6-cc", "claude-opus-4-6-cc"},         // 不匹配，原样返回
 		{"mimo-v2.6-pro", "mimo-v2.6-pro[1m]"},               // 新增第三方预设
-		{"kimi-k3-cc", "kimi-k3-cc[1m]"},                     // 预设表内第三方模型也加后缀
+		{"kimi-k3.1-pro", "kimi-k3.1-pro[1m]"},               // 预设表内第三方模型也加后缀
 		{"glm-5.3-flashx", "glm-5.3-flashx[1m]"},
-		{"glm-5.3-cc", "glm-5.3-cc[1m]"},
-		{"claude-haiku-4-5-20251001-cc", "claude-haiku-4-5-20251001-cc"}, // 表内但 Ctx1M=false，不加后缀
-		{"deepseek-v4.1-flash", "deepseek-v4.1-flash[1m]"},
+		{"glm-5.3", "glm-5.3[1m]"},
+		{"glm-5.3-flash", "glm-5.3-flash[1m]"},
+		{"qwen3.8-max", "qwen3.8-max[1m]"},
+		{"qwen3.8-flash", "qwen3.8-flash[1m]"},
+		{"claude-haiku-5-5-cc", "claude-haiku-5-5-cc[1m]"},
+		{"deepseek-v4.1-flash-1017", "deepseek-v4.1-flash-1017[1m]"},
+		{"MiniMax-M3.1-Flash", "MiniMax-M3.1-Flash[1m]"},
+		{"hy4", "hy4[1m]"},
+		{"step-5-preview", "step-5-preview[1m]"},
 		{"glm-5.1-cc", "glm-5.1-cc"}, // 表外第三方模型原样返回
 	}
 	for _, c := range cases {
@@ -442,7 +448,7 @@ func TestBuildVSCodeEnvVars(t *testing.T) {
 		BaseURL:     "https://api.example.com",
 		AuthToken:   "sk-test-token",
 		Model:       "claude-sonnet-4-6-cc",
-		HaikuModel:  "claude-haiku-4-5-20251001-cc",
+		HaikuModel:  "claude-haiku-5-5-cc",
 		SonnetModel: "claude-sonnet-4-6-cc",
 		OpusModel:   "claude-opus-4-6-cc",
 	}
@@ -1831,7 +1837,7 @@ func TestNamedConfigRoundTrip(t *testing.T) {
 			BaseURL:     "https://www.dmxapi.cn",
 			AuthToken:   "sk-test-123",
 			Model:       "claude-opus-4-8-cc",
-			HaikuModel:  "claude-haiku-4-5-20251001-cc",
+			HaikuModel:  "claude-haiku-5-5-cc",
 			SonnetModel: "claude-sonnet-4-6-cc",
 			OpusModel:   "claude-opus-4-8-cc",
 		},

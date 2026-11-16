@@ -73,18 +73,18 @@ const (
 
 	// 默认模型值
 	defaultModel       = "claude-opus-5-5-cc"
-	defaultHaikuModel  = "claude-haiku-4-5-20251001-cc"
+	defaultHaikuModel  = "claude-haiku-5-5-cc"
 	defaultSonnetModel = "claude-sonnet-5-5-cc"
 	defaultOpusModel   = "claude-opus-5-5-cc"
-	defaultFableModel  = "claude-fable-5-1-cc"
+	defaultFableModel  = "claude-fable-5-2-cc"
 
 	// dmxapi 推荐配置（一键模式使用）
 	recommendedBaseURL     = "https://www.dmxapi.cn"
 	recommendedModel       = "claude-opus-5-5-cc"
-	recommendedHaikuModel  = "claude-haiku-4-5-20251001-cc"
+	recommendedHaikuModel  = "claude-haiku-5-5-cc"
 	recommendedSonnetModel = "claude-sonnet-5-5-cc"
 	recommendedOpusModel   = "claude-opus-5-5-cc"
-	recommendedFableModel  = "claude-fable-5-1-cc"
+	recommendedFableModel  = "claude-fable-5-2-cc"
 
 	// recommendedAttributionText 新手流程默认 git 署名（写入 settings.json 顶层 attribution）
 	recommendedAttributionText = "Generated with dmxapi"
@@ -102,16 +102,19 @@ type presetModel struct {
 var presetModels = []presetModel{
 	{"claude-opus-5-5-cc", true},
 	{"claude-sonnet-5-5-cc", true},
-	{"claude-fable-5-1-cc", true},
-	{"claude-haiku-4-5-20251001-cc", false}, // haiku 非 1M 上下文，不加 [1m]
+	{"claude-fable-5-2-cc", true},
+	{"claude-haiku-5-5-cc", true},
 	{"mimo-v2.6-pro", true},
-	{"kimi-k3-cc", true},
+	{"kimi-k3.1-pro", true},
 	{"glm-5.3-flashx", true},
-	{"glm-5.3-cc", true},
-	{"glm-5.3-flash-cc", true},
-	{"qwen3.8-max-cc", true},
-	{"qwen3.8-flash-cc", true},
-	{"deepseek-v4.1-flash", true},
+	{"glm-5.3", true},
+	{"glm-5.3-flash", true},
+	{"qwen3.8-max", true},
+	{"qwen3.8-flash", true},
+	{"deepseek-v4.1-flash-1017", true},
+	{"MiniMax-M3.1-Flash", true},
+	{"hy4", true},
+	{"step-5-preview", true},
 }
 
 // allEnvVarKeys 本工具管理的所有环境变量名，清除时使用
