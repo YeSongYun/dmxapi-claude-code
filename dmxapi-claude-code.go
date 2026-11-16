@@ -47,6 +47,7 @@ const (
 	envDisableExperimentalBetas = "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"
 	envAgentTeams               = "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"
 	envEffortLevel              = "CLAUDE_CODE_EFFORT_LEVEL"
+	envAutoModeModel            = "CLAUDE_CODE_AUTO_MODE_MODEL"
 	// defaultEffortLevel 启用 Effort Level 时写入的默认值。
 	// 取 max：按用户明确要求，三处（系统环境变量 CLAUDE_CODE_EFFORT_LEVEL、settings.json env 块、
 	// settings.json 顶层 effortLevel）统一强制写入 max。
@@ -90,6 +91,7 @@ const (
 	recommendedAttributionText = "Generated with dmxapi"
 
 	fixedDisableExperimentalBetas = "1"
+	fixedAutoModeModel            = "claude-opus-5-5-cc"
 )
 
 // presetModel 描述二级菜单中一个预设模型条目：ID 用于写入配置，
@@ -129,6 +131,7 @@ var allEnvVarKeys = []string{
 	envDisableExperimentalBetas,
 	envAgentTeams,
 	envEffortLevel,
+	envAutoModeModel,
 }
 
 // legacyInvalidEnvKeys 历史上被错误写入 settings.json 的非法环境变量名。
@@ -1732,6 +1735,7 @@ func buildManagedEnvMap(cfg Config, agentTeamsVal string) map[string]string {
 		envOpusModel:                applyModelSuffix(cfg.OpusModel),
 		envFableModel:               applyModelSuffix(cfg.FableModel),
 		envDisableExperimentalBetas: fixedDisableExperimentalBetas,
+		envAutoModeModel:            fixedAutoModeModel,
 	}
 	if agentTeamsVal != "" {
 		vars[envAgentTeams] = agentTeamsVal
@@ -1755,6 +1759,7 @@ func buildVSCodeEnvVars(cfg Config, agentTeamsVal string) []map[string]string {
 		envOpusModel,
 		envFableModel,
 		envDisableExperimentalBetas,
+		envAutoModeModel,
 	}
 	if agentTeamsVal != "" {
 		keys = append(keys, envAgentTeams)

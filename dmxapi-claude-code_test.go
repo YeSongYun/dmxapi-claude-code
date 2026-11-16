@@ -454,8 +454,8 @@ func TestBuildVSCodeEnvVars(t *testing.T) {
 	}
 
 	vars := buildVSCodeEnvVars(cfg, "")
-	if len(vars) != 8 {
-		t.Fatalf("expected 8 vars, got %d", len(vars))
+	if len(vars) != 9 {
+		t.Fatalf("expected 9 vars, got %d", len(vars))
 	}
 	found := false
 	for _, v := range vars {
@@ -475,10 +475,19 @@ func TestBuildVSCodeEnvVars(t *testing.T) {
 	if !found {
 		t.Error("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS not found or wrong value")
 	}
+	found = false
+	for _, v := range vars {
+		if v["name"] == envAutoModeModel && v["value"] == "claude-opus-5-5-cc" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("CLAUDE_CODE_AUTO_MODE_MODEL not found or wrong value")
+	}
 
 	vars2 := buildVSCodeEnvVars(cfg, "1")
-	if len(vars2) != 9 {
-		t.Fatalf("expected 9 vars with agent teams, got %d", len(vars2))
+	if len(vars2) != 10 {
+		t.Fatalf("expected 10 vars with agent teams, got %d", len(vars2))
 	}
 	found = false
 	for _, v := range vars2 {
@@ -1386,6 +1395,7 @@ func TestAllEnvVarKeys_ContainsAllKnownKeys(t *testing.T) {
 		"CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS",
 		"CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS",
 		"CLAUDE_CODE_EFFORT_LEVEL",
+		"CLAUDE_CODE_AUTO_MODE_MODEL",
 	}
 
 	if len(allEnvVarKeys) != len(expected) {
