@@ -445,12 +445,13 @@ func TestBuildVSCodeEnvVars(t *testing.T) {
 		t.Setenv("USERPROFILE", home)
 	}
 	cfg := Config{
-		BaseURL:     "https://api.example.com",
-		AuthToken:   "sk-test-token",
-		Model:       "claude-sonnet-4-6-cc",
-		HaikuModel:  "claude-haiku-5-5-cc",
-		SonnetModel: "claude-sonnet-4-6-cc",
-		OpusModel:   "claude-opus-4-6-cc",
+		BaseURL:       "https://api.example.com",
+		AuthToken:     "sk-test-token",
+		Model:         "claude-sonnet-4-6-cc",
+		HaikuModel:    "claude-haiku-5-5-cc",
+		SonnetModel:   "claude-sonnet-4-6-cc",
+		OpusModel:     "claude-opus-4-6-cc",
+		AutoModeModel: "claude-sonnet-5-5-cc",
 	}
 
 	vars := buildVSCodeEnvVars(cfg, "")
@@ -477,7 +478,7 @@ func TestBuildVSCodeEnvVars(t *testing.T) {
 	}
 	found = false
 	for _, v := range vars {
-		if v["name"] == envAutoModeModel && v["value"] == "claude-opus-5-5-cc" {
+		if v["name"] == envAutoModeModel && v["value"] == cfg.AutoModeModel {
 			found = true
 		}
 	}
@@ -497,6 +498,38 @@ func TestBuildVSCodeEnvVars(t *testing.T) {
 	}
 	if !found {
 		t.Error("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS not found")
+	}
+
+	cfg.AutoModeModel = ""
+	varsWithoutAutoMode := buildVSCodeEnvVars(cfg, "")
+	if len(varsWithoutAutoMode) != 8 {
+		t.Fatalf("expected 8 vars without Auto Mode model, got %d", len(varsWithoutAutoMode))
+	}
+	for _, v := range varsWithoutAutoMode {
+		if v["name"] == envAutoModeModel {
+			t.Error("CLAUDE_CODE_AUTO_MODE_MODEL should be omitted when AutoModeModel is empty")
+		}
+	}
+}
+
+func TestBuildManagedEnvMap_AutoModeModel(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", home)
+	}
+	t.Setenv(envAgentTeams, "")
+	t.Setenv(envEffortLevel, "")
+
+	cfg := Config{AutoModeModel: "custom-auto-mode-model"}
+	vars := buildManagedEnvMap(cfg, "")
+	if got := vars[envAutoModeModel]; got != "custom-auto-mode-model" {
+		t.Errorf("%s = %q, want custom-auto-mode-model", envAutoModeModel, got)
+	}
+
+	vars = buildManagedEnvMap(Config{}, "")
+	if _, exists := vars[envAutoModeModel]; exists {
+		t.Errorf("%s should be omitted when AutoModeModel is empty", envAutoModeModel)
 	}
 }
 
@@ -1343,6 +1376,7 @@ func TestLoadExistingConfig_FallsBackToClaudeSettings(t *testing.T) {
     "ANTHROPIC_BASE_URL": "https://from-settings.example.com",
     "ANTHROPIC_AUTH_TOKEN": "token-from-settings",
     "ANTHROPIC_MODEL": "claude-sonnet-4-6-cc",
+    "CLAUDE_CODE_AUTO_MODE_MODEL": "claude-sonnet-5-5-cc",
     "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
   }
 }`
@@ -1354,6 +1388,7 @@ func TestLoadExistingConfig_FallsBackToClaudeSettings(t *testing.T) {
 		t.Setenv(envBaseURL, "")
 		t.Setenv(envAuthToken, "")
 		t.Setenv(envModel, "")
+		t.Setenv(envAutoModeModel, "")
 		t.Setenv(envAgentTeams, "")
 		cfg := loadExistingConfig()
 		if cfg.BaseURL != "https://from-settings.example.com" {
@@ -1365,6 +1400,9 @@ func TestLoadExistingConfig_FallsBackToClaudeSettings(t *testing.T) {
 		if cfg.Model != "claude-sonnet-4-6-cc" {
 			t.Errorf("Model fallback failed: %q", cfg.Model)
 		}
+		if cfg.AutoModeModel != "claude-sonnet-5-5-cc" {
+			t.Errorf("AutoModeModel fallback failed: %q", cfg.AutoModeModel)
+		}
 		if got := getManagedAgentTeamsValue(); got != "1" {
 			t.Errorf("AgentTeams fallback failed: %q", got)
 		}
@@ -1372,10 +1410,14 @@ func TestLoadExistingConfig_FallsBackToClaudeSettings(t *testing.T) {
 
 	t.Run("当前环境变量优先", func(t *testing.T) {
 		t.Setenv(envBaseURL, "https://from-env.example.com")
+		t.Setenv(envAutoModeModel, "custom-auto-mode-model")
 		t.Setenv(envAgentTeams, "0")
 		cfg := loadExistingConfig()
 		if cfg.BaseURL != "https://from-env.example.com" {
 			t.Errorf("env value should override settings fallback: %q", cfg.BaseURL)
+		}
+		if cfg.AutoModeModel != "custom-auto-mode-model" {
+			t.Errorf("AutoModeModel env value should override settings fallback: %q", cfg.AutoModeModel)
 		}
 		if got := getManagedAgentTeamsValue(); got != "0" {
 			t.Errorf("AgentTeams env value should override settings fallback: %q", got)
@@ -1844,12 +1886,13 @@ func TestNamedConfigRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	nc := NamedConfig{
 		Config: Config{
-			BaseURL:     "https://www.dmxapi.cn",
-			AuthToken:   "sk-test-123",
-			Model:       "claude-opus-4-8-cc",
-			HaikuModel:  "claude-haiku-5-5-cc",
-			SonnetModel: "claude-sonnet-4-6-cc",
-			OpusModel:   "claude-opus-4-8-cc",
+			BaseURL:       "https://www.dmxapi.cn",
+			AuthToken:     "sk-test-123",
+			Model:         "claude-opus-4-8-cc",
+			HaikuModel:    "claude-haiku-5-5-cc",
+			SonnetModel:   "claude-sonnet-4-6-cc",
+			OpusModel:     "claude-opus-4-8-cc",
+			AutoModeModel: "claude-sonnet-5-5-cc",
 		},
 		Name:        "我的配置",
 		AgentTeams:  "1",

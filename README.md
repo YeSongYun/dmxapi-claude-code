@@ -160,7 +160,7 @@ xattr -cr dmxapi-claude-code-v1.9.9-macos-amd64
 | `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` | 禁用实验性 Beta 功能（固定为 1）|
 | `CLAUDE_CODE_EFFORT_LEVEL` | 思考等级（启用时写入 `max`，配置流程默认自动启用）|
 | `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` | Agent Teams 实验性功能（启用时写入 1，未启用不写入）|
-| `CLAUDE_CODE_AUTO_MODE_MODEL` | Auto Mode 判断模型（固定为 `claude-opus-5-5-cc`）|
+| `CLAUDE_CODE_AUTO_MODE_MODEL` | Auto Mode 判断模型（在模型配置菜单中选择，默认 `claude-opus-5-5-cc`）|
 
 > 除系统环境变量外，以上配置会同步写入 `~/.claude/settings.json`；选择配置 VSCode 插件时还会写入 VSCode 的 `claudeCode.environmentVariables` 设置。已保存的命名配置存放在 `~/.DMXAPI/claude_code/` 目录。
 

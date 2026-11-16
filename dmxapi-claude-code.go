@@ -73,25 +73,26 @@ const (
 	attributionPRKey             = "pr"
 
 	// 默认模型值
-	defaultModel       = "claude-opus-5-5-cc"
-	defaultHaikuModel  = "claude-haiku-5-5-cc"
-	defaultSonnetModel = "claude-sonnet-5-5-cc"
-	defaultOpusModel   = "claude-opus-5-5-cc"
-	defaultFableModel  = "claude-fable-5-2-cc"
+	defaultModel         = "claude-opus-5-5-cc"
+	defaultHaikuModel    = "claude-haiku-5-5-cc"
+	defaultSonnetModel   = "claude-sonnet-5-5-cc"
+	defaultOpusModel     = "claude-opus-5-5-cc"
+	defaultFableModel    = "claude-fable-5-2-cc"
+	defaultAutoModeModel = "claude-opus-5-5-cc"
 
 	// dmxapi 推荐配置（一键模式使用）
-	recommendedBaseURL     = "https://www.dmxapi.cn"
-	recommendedModel       = "claude-opus-5-5-cc"
-	recommendedHaikuModel  = "claude-haiku-5-5-cc"
-	recommendedSonnetModel = "claude-sonnet-5-5-cc"
-	recommendedOpusModel   = "claude-opus-5-5-cc"
-	recommendedFableModel  = "claude-fable-5-2-cc"
+	recommendedBaseURL       = "https://www.dmxapi.cn"
+	recommendedModel         = "claude-opus-5-5-cc"
+	recommendedHaikuModel    = "claude-haiku-5-5-cc"
+	recommendedSonnetModel   = "claude-sonnet-5-5-cc"
+	recommendedOpusModel     = "claude-opus-5-5-cc"
+	recommendedFableModel    = "claude-fable-5-2-cc"
+	recommendedAutoModeModel = "claude-opus-5-5-cc"
 
 	// recommendedAttributionText 新手流程默认 git 署名（写入 settings.json 顶层 attribution）
 	recommendedAttributionText = "Generated with dmxapi"
 
 	fixedDisableExperimentalBetas = "1"
-	fixedAutoModeModel            = "claude-opus-5-5-cc"
 )
 
 // presetModel 描述二级菜单中一个预设模型条目：ID 用于写入配置，
@@ -302,13 +303,14 @@ var rawModeState *term.State
 
 // Config 存储所有配置项
 type Config struct {
-	BaseURL     string `json:"baseUrl"`
-	AuthToken   string `json:"authToken"`
-	Model       string `json:"model"`
-	HaikuModel  string `json:"haikuModel"`
-	SonnetModel string `json:"sonnetModel"`
-	OpusModel   string `json:"opusModel"`
-	FableModel  string `json:"fableModel"`
+	BaseURL       string `json:"baseUrl"`
+	AuthToken     string `json:"authToken"`
+	Model         string `json:"model"`
+	HaikuModel    string `json:"haikuModel"`
+	SonnetModel   string `json:"sonnetModel"`
+	OpusModel     string `json:"opusModel"`
+	FableModel    string `json:"fableModel"`
+	AutoModeModel string `json:"autoModeModel,omitempty"`
 }
 
 // Attribution 表示 Claude Code settings.json 顶层 attribution 对象的三态配置，
@@ -1735,7 +1737,10 @@ func buildManagedEnvMap(cfg Config, agentTeamsVal string) map[string]string {
 		envOpusModel:                applyModelSuffix(cfg.OpusModel),
 		envFableModel:               applyModelSuffix(cfg.FableModel),
 		envDisableExperimentalBetas: fixedDisableExperimentalBetas,
-		envAutoModeModel:            fixedAutoModeModel,
+	}
+	// Auto Mode 判断模型要求完整模型 ID，不能追加主模型使用的 [1m] 后缀。
+	if cfg.AutoModeModel != "" {
+		vars[envAutoModeModel] = cfg.AutoModeModel
 	}
 	if agentTeamsVal != "" {
 		vars[envAgentTeams] = agentTeamsVal
@@ -1759,7 +1764,9 @@ func buildVSCodeEnvVars(cfg Config, agentTeamsVal string) []map[string]string {
 		envOpusModel,
 		envFableModel,
 		envDisableExperimentalBetas,
-		envAutoModeModel,
+	}
+	if cfg.AutoModeModel != "" {
+		keys = append(keys, envAutoModeModel)
 	}
 	if agentTeamsVal != "" {
 		keys = append(keys, envAgentTeams)
@@ -2364,13 +2371,14 @@ func loadConfigFromClaudeSettings() loadedClaudeSettings {
 	}
 
 	result.Config = Config{
-		BaseURL:     getString(envBaseURL),
-		AuthToken:   getString(envAuthToken),
-		Model:       getString(envModel),
-		HaikuModel:  getString(envHaikuModel),
-		SonnetModel: getString(envSonnetModel),
-		OpusModel:   getString(envOpusModel),
-		FableModel:  getString(envFableModel),
+		BaseURL:       getString(envBaseURL),
+		AuthToken:     getString(envAuthToken),
+		Model:         getString(envModel),
+		HaikuModel:    getString(envHaikuModel),
+		SonnetModel:   getString(envSonnetModel),
+		OpusModel:     getString(envOpusModel),
+		FableModel:    getString(envFableModel),
+		AutoModeModel: getString(envAutoModeModel),
 	}
 	result.AgentTeams = getString(envAgentTeams)
 	result.EffortLevel = getString(envEffortLevel)
@@ -3518,13 +3526,14 @@ func checkStreamResponse(r io.Reader) error {
 // loadExistingConfig 加载现有配置
 func loadExistingConfig() Config {
 	cfg := Config{
-		BaseURL:     getEnvVar(envBaseURL),
-		AuthToken:   getEnvVar(envAuthToken),
-		Model:       getEnvVar(envModel),
-		HaikuModel:  getEnvVar(envHaikuModel),
-		SonnetModel: getEnvVar(envSonnetModel),
-		OpusModel:   getEnvVar(envOpusModel),
-		FableModel:  getEnvVar(envFableModel),
+		BaseURL:       getEnvVar(envBaseURL),
+		AuthToken:     getEnvVar(envAuthToken),
+		Model:         getEnvVar(envModel),
+		HaikuModel:    getEnvVar(envHaikuModel),
+		SonnetModel:   getEnvVar(envSonnetModel),
+		OpusModel:     getEnvVar(envOpusModel),
+		FableModel:    getEnvVar(envFableModel),
+		AutoModeModel: getEnvVar(envAutoModeModel),
 	}
 
 	fallback := loadConfigFromClaudeSettings()
@@ -3548,6 +3557,9 @@ func loadExistingConfig() Config {
 	}
 	if cfg.FableModel == "" {
 		cfg.FableModel = fallback.FableModel
+	}
+	if cfg.AutoModeModel == "" {
+		cfg.AutoModeModel = fallback.AutoModeModel
 	}
 	return cfg
 }
@@ -4506,6 +4518,7 @@ func runL1Menu(cfg *Config, allowBack bool) bool {
 		{"Sonnet 模型", &cfg.SonnetModel},
 		{"Opus 模型", &cfg.OpusModel},
 		{"Fable 模型", &cfg.FableModel},
+		{"Auto Mode 判断模型", &cfg.AutoModeModel},
 	}
 
 	restore, err := enterRawMode()
@@ -4564,6 +4577,7 @@ func configureModelsFallback(cfg *Config, allowBack bool) bool {
 	fmt.Printf("  %-35s = %s\n", envSonnetModel, cfg.SonnetModel)
 	fmt.Printf("  %-35s = %s\n", envOpusModel, cfg.OpusModel)
 	fmt.Printf("  %-35s = %s\n", envFableModel, cfg.FableModel)
+	fmt.Printf("  %-35s = %s\n", envAutoModeModel, cfg.AutoModeModel)
 
 	ok, back := styledConfirm("是否修改模型配置", allowBack)
 	if allowBack && back {
@@ -4598,6 +4612,11 @@ func configureModelsFallback(cfg *Config, allowBack bool) bool {
 	if input != "" {
 		cfg.FableModel = input
 	}
+
+	input = styledInput("Auto Mode 判断模型")
+	if input != "" {
+		cfg.AutoModeModel = input
+	}
 	return false
 }
 
@@ -4618,6 +4637,9 @@ func configureModels(cfg *Config, allowBack bool) bool {
 	}
 	if cfg.FableModel == "" {
 		cfg.FableModel = defaultFableModel
+	}
+	if cfg.AutoModeModel == "" {
+		cfg.AutoModeModel = defaultAutoModeModel
 	}
 
 	printSectionHeader("配置模型设置")
@@ -4803,6 +4825,7 @@ func runRecommendedConfig() (back bool) {
 	printInfo(fmt.Sprintf("Sonnet 模型:      %s", recommendedSonnetModel))
 	printInfo(fmt.Sprintf("Opus 模型:        %s", recommendedOpusModel))
 	printInfo(fmt.Sprintf("Fable 模型:       %s", recommendedFableModel))
+	printInfo(fmt.Sprintf("Auto Mode 模型:   %s", recommendedAutoModeModel))
 	printInfo(fmt.Sprintf("Effort Level:     %s (%s=%s)", defaultEffortLevel, envEffortLevel, defaultEffortLevel))
 	printInfo("将自动禁用实验性请求头、设置 max 最高推理深度，并配置 VSCode 插件")
 	fmt.Println()
@@ -4816,13 +4839,14 @@ func runRecommendedConfig() (back bool) {
 	}
 
 	cfg := Config{
-		BaseURL:     recommendedBaseURL,
-		AuthToken:   authToken,
-		Model:       recommendedModel,
-		HaikuModel:  recommendedHaikuModel,
-		SonnetModel: recommendedSonnetModel,
-		OpusModel:   recommendedOpusModel,
-		FableModel:  recommendedFableModel,
+		BaseURL:       recommendedBaseURL,
+		AuthToken:     authToken,
+		Model:         recommendedModel,
+		HaikuModel:    recommendedHaikuModel,
+		SonnetModel:   recommendedSonnetModel,
+		OpusModel:     recommendedOpusModel,
+		FableModel:    recommendedFableModel,
+		AutoModeModel: recommendedAutoModeModel,
 	}
 
 	fmt.Println()
@@ -5286,6 +5310,7 @@ func printSummary(cfg Config) {
 		makeRow("Sonnet Model", cfg.SonnetModel, colorCyan),
 		makeRow("Opus Model", cfg.OpusModel, colorCyan),
 		makeRow("Fable Model", cfg.FableModel, colorCyan),
+		makeRow("Auto Mode Model", cfg.AutoModeModel, colorCyan),
 		makeRow("Disable Betas", fixedDisableExperimentalBetas, colorMagenta),
 		makeRow("Agent Teams", agentTeamsDisplay, agentTeamsColor),
 		makeRow("Effort Level", effortLevelDisplay, effortLevelColor),
